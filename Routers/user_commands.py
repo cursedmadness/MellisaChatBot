@@ -1,0 +1,109 @@
+from aiogram import Router, F
+from aiogram.filters.command import Command
+from aiogram.types import Message
+from aiogram.enums import ChatType
+import os
+from deep_translator import GoogleTranslator
+from pydub import AudioSegment
+
+
+user_router = Router()
+
+AudioSegment.converter = "D:\\bots\\coder\\ffmpeg.exe"
+AudioSegment.ffmpeg = "D:\\bots\\coder\\ffmpeg.exe"
+AudioSegment.ffprobe = "D:\\bots\\coder\\ffprobe.exe"
+
+
+@user_router.message(Command('voice'))
+@user_router.message(F.text.lower().in_('войс'), F.chat.type == ChatType.GROUP)
+async def voice_message(message: Message):
+    if not message.reply_to_message:
+        await message.reply(f'Вы не попали на голосовое/видео- сообщение.')
+
+    if ((not message.reply_to_message.voice) and (not message.reply_to_message.video_note) and
+            (not message.reply_to_message.video)):
+        await message.reply(f'Ответное смс не является голосовым/видео сообщением.')
+
+    if message.reply_to_message.voice:
+        audio_file_path_ogg = 'voice.ogg'
+        audio_file_path_mp3 = 'voice.mp3'
+        process_message = await message.reply_to_message.reply('📝 Процесс перевода голосового '
+                                                               'сообщения запущен!\n🕐 Ожидайте. . .')
+        file_info = await message.reply_to_message.bot.get_file(message.reply_to_message.voice.file_id)
+        file_path = file_info.file_path
+        file = await message.reply_to_message.bot.download_file(file_path)
+        voice_time = message.reply_to_message.voice.duration
+
+        with open(audio_file_path_ogg, 'wb') as audio_file:
+            audio_file.write(file.read())
+        audio_segment = AudioSegment.from_ogg(audio_file_path_ogg)
+        audio_segment.export(audio_file_path_mp3, format='mp3')
+
+        def format_time(voice_time):
+            minutes = voice_time // 60
+            seconds = voice_time % 60
+            return f"{minutes:02}:{seconds:02}"
+
+        with open(audio_file_path_mp3, 'rb') as audio_file_mp3:
+            voice_time_formatted = format_time(voice_time)
+            transcription = user_router.audio.transcriptions.create(model='whisper-large-v3', file=audio_file_mp3)
+            traslated = GoogleTranslator(source='auto', target='ru').translate(transcription.text)
+            await process_message.edit_text(f"🕐 <b>{voice_time_formatted}</b>:\n{traslated}")
+        os.remove(audio_file_path_ogg)
+        os.remove(audio_file_path_mp3)
+
+    elif message.reply_to_message.video_note:
+        video_file_path_mp4 = 'video.mp4'
+        audio_file_path_mp3 = 'voice.mp3'
+        process_message = await message.reply_to_message.reply('📝 Процесс перевода кружочка '
+                                                               'запущен!\n🕐 Ожидайте. . .')
+        file_info = await message.reply_to_message.bot.get_file(message.reply_to_message.video_note.file_id)
+        file_path = file_info.file_path
+        file = await message.reply_to_message.bot.download_file(file_path)
+        voice_time = message.reply_to_message.video_note.duration
+
+        with open(video_file_path_mp4, 'wb') as audio_file:
+            audio_file.write(file.read())
+        audio_segment = AudioSegment.from_file(video_file_path_mp4)
+        audio_segment.export(audio_file_path_mp3, format='mp3')
+
+        def format_time(voice_time):
+            minutes = voice_time // 60
+            seconds = voice_time % 60
+            return f"{minutes:02}:{seconds:02}"
+
+        with open(audio_file_path_mp3, 'rb') as audio_file_mp3:
+            voice_time_formatted = format_time(voice_time)
+            transcription = user_router.audio.transcriptions.create(model='whisper-large-v3', file=audio_file_mp3)
+            traslated = GoogleTranslator(source='auto', target='ru').translate(transcription.text)
+            await process_message.edit_text(f"🕐 <b>{voice_time_formatted}</b>:\n{traslated}")
+        os.remove(video_file_path_mp4)
+        os.remove(audio_file_path_mp3)
+
+    elif message.reply_to_message.video:
+        video_file_path_mp4 = 'video.mp4'
+        audio_file_path_mp3 = 'voice.mp3'
+        process_message = await message.reply_to_message.reply('📝 Процесс перевода видео сообщения '
+                                                               'запущен!\n🕐 Ожидайте. . .')
+        file_info = await message.reply_to_message.bot.get_file(message.reply_to_message.video.file_id)
+        file_path = file_info.file_path
+        file = await message.reply_to_message.bot.download_file(file_path)
+        voice_time = message.reply_to_message.video.duration
+
+        with open(video_file_path_mp4, 'wb') as audio_file:
+            audio_file.write(file.read())
+        audio_segment = AudioSegment.from_file(video_file_path_mp4)
+        audio_segment.export(audio_file_path_mp3, format='mp3')
+
+        def format_time(voice_time):
+            minutes = voice_time // 60
+            seconds = voice_time % 60
+            return f"{minutes:02}:{seconds:02}"
+
+        with open(audio_file_path_mp3, 'rb') as audio_file_mp3:
+            voice_time_formatted = format_time(voice_time)
+            transcription = user_router.audio.transcriptions.create(model='whisper-large-v3', file=audio_file_mp3)
+            traslated = GoogleTranslator(source='auto', target='ru').translate(transcription.text)
+            await process_message.edit_text(f"🕐 <b>{voice_time_formatted}</b>:\n{traslated}")
+        os.remove(video_file_path_mp4)
+        os.remove(audio_file_path_mp3)
