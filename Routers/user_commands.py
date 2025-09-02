@@ -21,9 +21,18 @@ AudioSegment.ffprobe = "D:\\bots\\coder\\ffprobe.exe" """
 async def ping_bot(message: Message): # type: ignore
     ev = (datetime.datetime.now(tz=datetime.timezone.utc) - message.date).microseconds / 1000
     sent_message = await message.answer("🤖 Измеряю пинг...")
-    out = f"🤖 <b>Ответил за</b>: <code>{ev}</code> s\n" \
+     # Устанавливаем порог для пинга
+    ping_threshold = 50 
 
+    # Проверяем значение пинга и выбираем текст ответа
+    if ev < ping_threshold:
+        out = f"🏓 Партия выиграла в пинг-понг за <code>{ev}</code> с"
+    else:
+        out = f"🏓 Партия проиграла в пинг-понг за <code>{ev}</code> с"
+    
+    # Редактируем сообщение с окончательным ответом
     await sent_message.edit_text(out)
+    await message.answer(f'ИИ сказал что пинг-понг нац.игра Китая:)')
     
 # Роутер вывода списка администраторов
 @user_router.message(Command("adminlist"))
