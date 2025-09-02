@@ -45,7 +45,6 @@ async def get_profile_text(user_id: int) -> str:
 async def start_handler(message: Message):
     user_id = message.from_user.id
     first_name = message.from_user.first_name or "пользователь"
-    
     nickname = get_user_nickname(user_id)
     
     if nickname:
