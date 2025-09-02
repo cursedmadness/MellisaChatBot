@@ -43,7 +43,7 @@ async def admin_list_command(message: Message):
     await message.answer(admin_list_text, parse_mode='HTML')
 
 # Роутер для перевода гс(захейчен Каем)
-@user_router.message(Command('voice'))
+"""@user_router.message(Command('voice'))
 @user_router.message(F.text.lower().in_('войс'), F.chat.type == ChatType.GROUP)
 async def voice_message(message: Message):
     if not message.reply_to_message:
@@ -135,4 +135,4 @@ async def voice_message(message: Message):
             traslated = GoogleTranslator(source='auto', target='ru').translate(transcription.text)
             await process_message.edit_text(f"🕐 <b>{voice_time_formatted}</b>:\n{traslated}")
         os.remove(video_file_path_mp4)
-        os.remove(audio_file_path_mp3)
+        os.remove(audio_file_path_mp3)"""
