@@ -22,10 +22,10 @@ async def ping_bot(message: Message): # type: ignore
     ev = (datetime.datetime.now(tz=datetime.timezone.utc) - message.date).microseconds / 1000000
     sent_message = await message.answer("🤖 Измеряю пинг...")
      # Устанавливаем порог для пинга
-    ping_threshold = 50 
+    ping_threshold_sec = 0.05
 
     # Проверяем значение пинга и выбираем текст ответа
-    if ev < ping_threshold:
+    if ev < ping_threshold_sec:
         out = f"🏓 Партия выиграла в пинг-понг за <code>{ev}</code> с"
     else:
         out = f"🏓 Партия проиграла в пинг-понг за <code>{ev}</code> с"
