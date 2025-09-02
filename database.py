@@ -254,3 +254,46 @@ def get_user_description(user_id: int):
         finally:
             conn.close()
     return None
+
+# Добавьте эти функции в ваш файл database.py
+
+def increment_user_activity(user_id: int):
+    """Увеличивает счётчик активности пользователя на 1."""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Используем SQL для атомарного увеличения значения
+            cursor.execute("""
+                UPDATE users 
+                SET Активность_пользователя = Активность_пользователя + 1 
+                WHERE user_id = ?
+            """, (user_id,))
+            conn.commit()
+        except Error as e:
+            print(f"Ошибка при инкременте активности: {e}")
+        finally:
+            conn.close()
+
+def get_chat_leaderboard(limit: int = 10):
+    """Получает топ пользователей по активности."""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Выбираем ник и активность, сортируем по убыванию активности
+            # LIMIT ограничивает вывод, чтобы не спамить в чат
+            cursor.execute("""
+                SELECT nickname, Активность_пользователя 
+                FROM users 
+                WHERE Активность_пользователя > 0
+                ORDER BY Активность_пользователя DESC 
+                LIMIT ?
+            """, (limit,))
+            # Возвращаем список кортежей (ник, активность)
+            return cursor.fetchall()
+        except Error as e:
+            print(f"Ошибка при получении лидерборда: {e}")
+        finally:
+            conn.close()
+    return []

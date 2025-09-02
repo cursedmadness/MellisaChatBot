@@ -111,7 +111,7 @@ async def set_description_handler(message: Message):
 # Роутер 'Анкета' - выводит анкету с данными в лс бота(будет отличаться от профиля внутри чата(возможно))
 
 @reg_router.message(Command('anketa'))
-@reg_router.message(F.text.lower().in_(['анкета','моя анкета']), F.chat.type == ChatType.PRIVATE)
+@reg_router.message(F.text.lower().in_(['анкета','моя анкета']))
 async def profile_handler(message: Message):
     """
     Отправляет пользователю его анкету.
@@ -121,9 +121,10 @@ async def profile_handler(message: Message):
     profile_text = await get_profile_text(user_id)
     
     await message.answer(profile_text, parse_mode="Markdown")
+    await message.answer(f'Изменить данные своей анкеты Вы можете в личных сообщениях бота.')
 
-
-@reg_router.message(F.text.lower().in_('-ник'))
+@reg_router.message(Command('delete_nickname'))
+@reg_router.message(F.text.lower().in_(['удалить ник','очистить ник']))
 async def reset_nickname_handler(message: Message):
     """
     Сбрасывает ник пользователя к его имени в Telegram.
@@ -137,7 +138,8 @@ async def reset_nickname_handler(message: Message):
     await message.answer(f"✅ Ваш ник сброшен. Теперь он: **{first_name}**", parse_mode="Markdown")
 
 # --- НОВЫЙ ХЭНДЛЕР для очистки описания ---
-@reg_router.message(F.text.lower().in_('-описание'))
+@reg_router.message(Command('delete_description'))
+@reg_router.message(F.text.lower().in_(['удалить описание','очистить описание']))
 async def clear_description_handler(message: Message):
     """
     Очищает описание профиля пользователя.
@@ -151,7 +153,7 @@ async def clear_description_handler(message: Message):
     await message.answer("🗑️ Ваше описание было очищено.")
 
 
-@reg_router.message(F.text.lower().in_('мой ник'))
+@reg_router.message(F.text.lower().in_(['мой ник','ник']))
 async def show_my_nickname(message: Message):
     user_id = message.from_user.id
     nickname = get_user_nickname(user_id)
@@ -164,7 +166,7 @@ async def show_my_nickname(message: Message):
 
 
 # --- НОВЫЙ ХЭНДЛЕР для вывода описания ---
-@reg_router.message(F.text.lower().in_('моё описание'))
+@reg_router.message(F.text.lower().in_(['моё описание','описание']))
 async def show_my_description(message: Message):
     user_id = message.from_user.id
     description = get_user_description(user_id)
