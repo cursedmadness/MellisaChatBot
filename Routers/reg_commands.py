@@ -58,20 +58,20 @@ async def start_handler(message: Message):
 # Роутер на смену ника в анкете
 
 @reg_router.message(Command('set_nickname'))
-@reg_router.message(F.text.lower().startswith('сменить ник'))
+@reg_router.message(F.text.lower().startswith('сменить имя'))
 async def set_nickname_handler(message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
 
     if text.startswith('/set_nickname'):
         nick = text[13:].strip()
-    elif text.lower().startswith('сменить ник'):
+    elif text.lower().startswith('сменить имя'):
         nick = text[11:].strip()
     else:
         nick = ""       
 
     if not nick:
-        await message.answer("📝 Ошибка: Пожалуйста, укажите новый ник после команды.\n"
+        await message.answer("📝 Ошибка: Пожалуйста, укажите новое имя после команды.\n"
                              "Пример: /set_nickname Любитель Пива")
         return
     else:
