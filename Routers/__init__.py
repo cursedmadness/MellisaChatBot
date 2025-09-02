@@ -5,7 +5,7 @@ from .reg_commands import reg_router
 from .activity_commands import activity_routers
 from aiogram import Router
 
-main_router = Router()
+main_router = Router() # подключение роутеров
 
 main_router.include_router(admin_router) #Роутеры админ команд
 main_router.include_router(user_router) #Роутеры пользовательских команд

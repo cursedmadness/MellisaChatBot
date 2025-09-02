@@ -9,7 +9,7 @@ import time, datetime
 from Routers.admin_commands import ADMIN_IDS
 from database import get_all_admins
 
-user_router = Router()
+user_router = Router() # подключение роутеров
 
 """AudioSegment.converter = "D:\\bots\\coder\\ffmpeg.exe"
 AudioSegment.ffmpeg = "D:\\bots\\coder\\ffmpeg.exe"

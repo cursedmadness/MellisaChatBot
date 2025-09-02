@@ -12,7 +12,7 @@ from database import (
     set_user_description, get_user_profile, get_user_description
 )
 
-reg_router = Router()
+reg_router = Router() # подключение роутеров
 
 # Регистрация самой анкеты, берет информацию из БД(будет использоваться и для профиля частично)
 async def get_profile_text(user_id: int) -> str:
@@ -38,7 +38,7 @@ async def get_profile_text(user_id: int) -> str:
         return text
     else:
         return "Не удалось найти твой профиль. Попробуй написать /start"
-
+    
 
 # Стартовый хендлер для запуска регистрации анкеты
 @reg_router.message(Command('start'))

@@ -4,7 +4,7 @@ from aiogram.types import Message
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
 from database import increment_user_activity, get_chat_leaderboard
-activity_routers = Router()
+activity_routers = Router() # подключение роутеров
 
 STATS_ENABLED_CHATS = {-1002059485061, -1003079876973, -1002709445496} #ид чатов где собирается статистика
 

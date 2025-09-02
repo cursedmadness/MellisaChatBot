@@ -8,7 +8,7 @@ from database import get_all_admins, is_admin,add_admin, remove_admin
 
 ADMIN_IDS = [1534963580, 1103985703, 5806584445] # - ИД администраторов, у кого есть доступ к командам. Нужно будет настроить через бд.
 
-admin_router = Router()
+admin_router = Router() # подключение роутеров
 admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS)) 
 # Позволяет использовать команды ТОЛЬКО администраторам из бд.
 # (Сделать разницу между простыми администраторами(префикс) и администрации чата)
