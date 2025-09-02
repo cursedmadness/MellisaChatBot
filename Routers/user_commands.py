@@ -15,6 +15,7 @@ user_router = Router()
 AudioSegment.ffmpeg = "D:\\bots\\coder\\ffmpeg.exe"
 AudioSegment.ffprobe = "D:\\bots\\coder\\ffprobe.exe" """
 
+# Роутер-пинг. банально.
 @user_router.message(Command('ping'))
 @user_router.message(F.text.lower().in_(['пинг','бот']))
 async def ping_bot(message: Message): # type: ignore
@@ -24,7 +25,7 @@ async def ping_bot(message: Message): # type: ignore
 
     await sent_message.edit_text(out)
     
-
+# Роутер вывода списка администраторов
 @user_router.message(Command("adminlist"))
 @user_router.message(F.text.lower().in_(['кто админ','админы','кто здесь власть']))
 async def admin_list_command(message: Message):
@@ -41,7 +42,7 @@ async def admin_list_command(message: Message):
 
     await message.answer(admin_list_text, parse_mode='HTML')
 
-
+# Роутер для перевода гс(захейчен Каем)
 @user_router.message(Command('voice'))
 @user_router.message(F.text.lower().in_('войс'), F.chat.type == ChatType.GROUP)
 async def voice_message(message: Message):

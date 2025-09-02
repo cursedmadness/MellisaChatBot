@@ -66,7 +66,7 @@ async def ban_user(message: Message, bot: 'Bot'): # type: ignore
             f'был забанен пользователем <a href="tg://user?id={message.from_user.id}">{message.from_user.first_name}</a>',
             )
 
-
+# Роутер на добавление админа
 @admin_router.message(F.text.lower().startswith('+админ'))
 async def add_admin_command(message: Message, bot: 'Bot'): # type: ignore
     # Проверяем, что команда вызвана в групповом чате
@@ -127,6 +127,7 @@ async def add_admin_command(message: Message, bot: 'Bot'): # type: ignore
         parse_mode='HTML'
     )
 
+# Роутер снимающий с должности админа
 @admin_router.message(F.text.lower().startswith('-админ'))
 async def remove_admin_command(message: Message, bot: 'Bot'): # type: ignore
     # Проверяем, что команда вызвана в групповом чате

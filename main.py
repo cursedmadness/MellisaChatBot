@@ -8,12 +8,12 @@ from aiogram.enums import ParseMode
 from Routers.admin_commands import ADMIN_IDS
 
 
-TOKEN = '6695001037:AAG2GsxtOZcFFlvQ9jCzLQy3IhNrSkxmV2Y'
+TOKEN = '6695001037:AAG2GsxtOZcFFlvQ9jCzLQy3IhNrSkxmV2Y' # Изучить .env для защиты
 
-bot=Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot=Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML)) # Подключение бота(с оформлением смс)
 dp=Dispatcher()
 
-dp.include_router(main_router)
+dp.include_router(main_router) # Подключение всех роутеров
     
 async def main():
     create_table()

@@ -7,7 +7,7 @@ from aiogram import Router
 
 main_router = Router()
 
-main_router.include_router(admin_router) 
-main_router.include_router(user_router)
-main_router.include_router(reg_router)
-main_router.include_router(activity_routers)
+main_router.include_router(admin_router) #Роутеры админ команд
+main_router.include_router(user_router) #Роутеры пользовательских команд
+main_router.include_router(reg_router) #Роутеры регистрационных команд
+main_router.include_router(activity_routers) #Роутеры активности

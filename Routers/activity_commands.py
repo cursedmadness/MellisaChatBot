@@ -6,10 +6,10 @@ from aiogram.exceptions import TelegramBadRequest
 from database import increment_user_activity, get_chat_leaderboard
 activity_routers = Router()
 
-STATS_ENABLED_CHATS = {-1002059485061, -1003079876973, -1002709445496} 
+STATS_ENABLED_CHATS = {-1002059485061, -1003079876973, -1002709445496} #ид чатов где собирается статистика
 
 
-# --- НОВЫЙ ХЭНДЛЕР для команды "Статистика" ---
+# Роутер выводит статистику
 @activity_routers.message(Command('activity'))
 @activity_routers.message(F.text.lower().in_(['статистика','стата']))
 async def show_stats_handler(message: Message):
@@ -33,7 +33,7 @@ async def show_stats_handler(message: Message):
         
     await message.answer(response_text, parse_mode="Markdown")
 
-
+# Роутер собирающий статистику
 @activity_routers.message(F.text)
 async def count_messages(message: Message):
     # 1. Проверяем, находится ли чат в нашем списке

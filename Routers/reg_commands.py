@@ -40,10 +40,9 @@ async def get_profile_text(user_id: int) -> str:
         return "Не удалось найти твой профиль. Попробуй написать /start"
 
 
-# Стартовый хендлер для запуска регистрации анкеты и профиля(надо переделать графически)
+# Стартовый хендлер для запуска регистрации анкеты
 @reg_router.message(Command('start'))
 async def start_handler(message: Message):
-    # ... (код без изменений)
     user_id = message.from_user.id
     first_name = message.from_user.first_name or "пользователь"
     
@@ -58,7 +57,7 @@ async def start_handler(message: Message):
                              f"<code>сменить ник</code> или/и <code>сменить описание</code>\n"
                              f"чтобы добавить оформление анкете.")
 
-# Роутер на смену ника в анкете(и профиле)
+# Роутер на смену ника в анкете
 
 @reg_router.message(Command('set_nickname'))
 @reg_router.message(F.text.lower().startswith('сменить ник'))
@@ -122,6 +121,7 @@ async def profile_handler(message: Message):
     await message.answer(profile_text, parse_mode="Markdown")
     await message.answer(f'Изменить данные своей анкеты Вы можете в личных сообщениях бота.')
 
+# Роутер удаляет ник
 @reg_router.message(Command('delete_nickname'))
 @reg_router.message(F.text.lower().in_(['удалить ник','очистить ник']))
 async def reset_nickname_handler(message: Message):
@@ -136,7 +136,7 @@ async def reset_nickname_handler(message: Message):
     
     await message.answer(f"✅ Ваш ник сброшен. Теперь он: **{first_name}**", parse_mode="Markdown")
 
-# --- НОВЫЙ ХЭНДЛЕР для очистки описания ---
+# Роутер удаляет описание
 @reg_router.message(Command('delete_description'))
 @reg_router.message(F.text.lower().in_(['удалить описание','очистить описание']))
 async def clear_description_handler(message: Message):
@@ -151,7 +151,7 @@ async def clear_description_handler(message: Message):
     
     await message.answer("🗑️ Ваше описание было очищено.")
 
-
+# Роутер выводит ник пользователя
 @reg_router.message(F.text.lower().in_(['мой ник','ник']))
 async def show_my_nickname(message: Message):
     user_id = message.from_user.id
@@ -164,7 +164,7 @@ async def show_my_nickname(message: Message):
         await message.answer("Я тебя ещё не знаю. Напиши /start для регистрации.")
 
 
-# --- НОВЫЙ ХЭНДЛЕР для вывода описания ---
+# Роутер выводит описание пользователя
 @reg_router.message(F.text.lower().in_(['моё описание','описание']))
 async def show_my_description(message: Message):
     user_id = message.from_user.id
