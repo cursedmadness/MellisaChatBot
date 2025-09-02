@@ -15,12 +15,13 @@ from database import (
 reg_router = Router()
 
 # Регистрация самой анкеты, берет информацию из БД(будет использоваться и для профиля частично)
-async def get_profile_text(user_id: int) -> str:
+async def get_profile_text(user_id: int, message: Message) -> str:
     """
     Получает данные из БД и возвращает готовый текст для анкеты.
     Эту функцию можно будет использовать в любом роутере.
     """
     profile_data = get_user_profile(user_id)
+    first_name = message.from_user.first_name
     
     if profile_data:
         # Если в поле описания ничего нет (None), заменяем на "Не указано"
@@ -28,11 +29,11 @@ async def get_profile_text(user_id: int) -> str:
 
         # Собираем красивое сообщение
         text = (
-            f"👤 **Твоя анкета**\n\n"
-            f"📝 **Никнейм:** `{profile_data['nickname']}`\n"
-            f"🆔 **ID:** `{user_id}`\n\n"
-            f"⭐ **Репутация:** {profile_data['reputation']}\n"
-            f"📊 **Активность:** {profile_data['activity']}\n\n"
+            f"👤 **Досье гражданина**{first_name}\n\n"
+            f"🗃️ **Учётное имя:** `{profile_data['nickname']}`\n"
+            f"🆔 **Публичный цифровой идентификатор:** `{user_id}`\n\n"
+            f"🍚 **Социальный рейтинг:** {profile_data['reputation']}\n"
+            f"☀️ **Активность:** {profile_data['activity']}\n\n"
             f"📄 **Описание:**\n_{description}_"
         )
         return text
@@ -52,10 +53,9 @@ async def start_handler(message: Message):
         await message.answer(f"{nickname}, мы Вас узнали! 👋")
     else:
         add_user(user_id, first_name)
-        await message.answer(f"Привет, {first_name}! Ты успешно зарегистрирован.")
-        await message.answer(f"{first_name}, теперь ты можешь использовать команду\n"
-                             f"<code>сменить ник</code> или/и <code>сменить описание</code>\n"
-                             f"чтобы добавить оформление анкете.")
+        await message.answer(f" 🌸 Добро пожаловать, {first_name}. Ваш профиль загружен в систему. Партия гордится Вами!\n"
+                            f"Чтобы узнать больше о нас, можете перейти по этим ссылкам:\n"
+                            f"*ссылки*")
 
 # Роутер на смену ника в анкете
 
@@ -79,7 +79,7 @@ async def set_nickname_handler(message: Message):
     else:
         new_nickname = nick
         set_user_nickname(user_id, new_nickname)
-        await message.answer(f"👍 Ваш ник успешно изменен на: {new_nickname}")
+        await message.answer(f"✅ Ваше учётное имя успешно изменено на {new_nickname}")
 
 # Роутер на смену описания для анкеты(и профиля)
 
@@ -103,13 +103,13 @@ async def set_description_handler(message: Message):
     else:
         new_description = description
         set_user_description(user_id, description)
-        await message.answer(f"👍 Ваше описание успешно изменено на: {new_description}")
+        await message.answer(f"✅ Ваше описание успешно изменено.")
 
 
 # Роутер 'Анкета' - выводит анкету с данными в лс бота(будет отличаться от профиля внутри чата(возможно))
 
 @reg_router.message(Command('anketa'))
-@reg_router.message(F.text.lower().in_(['анкета','моя анкета']))
+@reg_router.message(F.text.lower().in_(['анкета','досье']))
 async def profile_handler(message: Message):
     """
     Отправляет пользователю его анкету.
@@ -119,11 +119,11 @@ async def profile_handler(message: Message):
     profile_text = await get_profile_text(user_id)
     
     await message.answer(profile_text, parse_mode="Markdown")
-    await message.answer(f'Изменить данные своей анкеты Вы можете в личных сообщениях бота.')
+    #await message.answer(f'Изменить данные своей анкеты Вы можете в личных сообщениях бота.')
 
 # Роутер удаляет ник
 @reg_router.message(Command('delete_nickname'))
-@reg_router.message(F.text.lower().in_(['удалить ник','очистить ник']))
+@reg_router.message(F.text.lower().in_(['удалить ник','удалить имя']))
 async def reset_nickname_handler(message: Message):
     """
     Сбрасывает ник пользователя к его имени в Telegram.
@@ -134,7 +134,7 @@ async def reset_nickname_handler(message: Message):
     
     set_user_nickname(user_id, first_name)
     
-    await message.answer(f"✅ Ваш ник сброшен. Теперь он: **{first_name}**", parse_mode="Markdown")
+    await message.answer(f"🗑️ Ваше имя успешно отправлено в ссылку.", parse_mode="Markdown")
 
 # Роутер удаляет описание
 @reg_router.message(Command('delete_description'))
@@ -149,7 +149,7 @@ async def clear_description_handler(message: Message):
     # Либо можно передать пустую строку "", результат будет тот же.
     set_user_description(user_id, None) 
     
-    await message.answer("🗑️ Ваше описание было очищено.")
+    await message.answer("🗑️ Ваше описание успешно отправлено в ссылку.")
 
 # Роутер выводит ник пользователя
 @reg_router.message(F.text.lower().in_(['мой ник','ник']))

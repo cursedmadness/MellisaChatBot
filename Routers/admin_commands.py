@@ -50,7 +50,7 @@ async def ban_user(message: Message, bot: 'Bot'): # type: ignore
 
         # Проверяем, что пользователь не пытается забанить сам себя
         if banned_user.id == message.from_user.id:
-            await message.answer("Вы не можете забанить самого себя!")
+            await message.answer("❌ Партия не одобряет самовыпил")
             return
 
         # Выполняем бан
@@ -62,8 +62,9 @@ async def ban_user(message: Message, bot: 'Bot'): # type: ignore
 
         # Отправляем сообщение с HTML-разметкой
         await message.answer(
-            f'Пользователь <a href="tg://user?id={banned_user.id}">{banned_user.first_name}</a> '
-            f'был забанен пользователем <a href="tg://user?id={message.from_user.id}">{message.from_user.first_name}</a>',
+            f'🌲Смотритель <a href="tg://user?id={message.from_user.id}">{message.from_user.first_name}</a> '
+            f'заблокировал гражданина <a href="tg://user?id={banned_user.id}">{banned_user.first_name}</a>',
+            f'Воля партии – исправительное перевоспитание.'
             )
 
 # Роутер на добавление админа

@@ -17,7 +17,7 @@ AudioSegment.ffprobe = "D:\\bots\\coder\\ffprobe.exe" """
 
 # Роутер-пинг. банально.
 @user_router.message(Command('ping'))
-@user_router.message(F.text.lower().in_(['пинг','бот']))
+@user_router.message(F.text.lower().in_(['пинг','социальный пинг-понг']))
 async def ping_bot(message: Message): # type: ignore
     ev = (datetime.datetime.now(tz=datetime.timezone.utc) - message.date).microseconds / 1000
     sent_message = await message.answer("🤖 Измеряю пинг...")
@@ -27,7 +27,7 @@ async def ping_bot(message: Message): # type: ignore
     
 # Роутер вывода списка администраторов
 @user_router.message(Command("adminlist"))
-@user_router.message(F.text.lower().in_(['кто админ','админы','кто здесь власть']))
+@user_router.message(F.text.lower().in_(['кто админ','админы','кто администратор','кто смотритель','.партия']))
 async def admin_list_command(message: Message):
     # Получаем список администраторов
     admins = get_all_admins()
@@ -36,7 +36,7 @@ async def admin_list_command(message: Message):
         return
 
     # Формируем ответ с HTML-разметкой
-    admin_list_text = "<b>Наши администраторы:</b>\n"
+    admin_list_text = "<b>🎓 Наши смотрители:</b>\n"
     for user_id, first_name in admins:
         admin_list_text += f"- <a href='tg://user?id={user_id}'>{first_name}</a> (ID: {user_id})\n"
 
