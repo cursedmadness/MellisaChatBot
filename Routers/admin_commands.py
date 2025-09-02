@@ -13,10 +13,8 @@ admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
 # Позволяет использовать команды ТОЛЬКО администраторам из бд.
 # (Сделать разницу между простыми администраторами(префикс) и администрации чата)
 
-
-
 @admin_router.message(Command('ban'))
-@admin_router.message(F.text.lower().startswith('бан'), F.chat.type == ChatType.GROUP) 
+@admin_router.message(F.text.lower().startswith('бан')) 
 # Новый для меня модуль .startswith - улавливает начало команды. Нужен для настройки других аргументов. 
 async def ban_user(message: Message, bot: 'Bot'): # type: ignore
         banned_user = None

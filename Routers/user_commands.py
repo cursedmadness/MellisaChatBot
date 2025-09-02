@@ -5,7 +5,7 @@ from aiogram.enums import ChatType
 import os
 from deep_translator import GoogleTranslator
 from pydub import AudioSegment
-
+import time, datetime
 from Routers.admin_commands import ADMIN_IDS
 from database import get_all_admins
 
@@ -15,6 +15,15 @@ user_router = Router()
 AudioSegment.ffmpeg = "D:\\bots\\coder\\ffmpeg.exe"
 AudioSegment.ffprobe = "D:\\bots\\coder\\ffprobe.exe" """
 
+@user_router.message(Command('ping'))
+@user_router.message(F.text.lower().in_(['пинг','бот']))
+async def ping_bot(message: Message): # type: ignore
+    ev = (datetime.datetime.now(tz=datetime.timezone.utc) - message.date).microseconds / 1000
+    sent_message = await message.answer("🤖 Измеряю пинг...")
+    out = f"🤖 <b>Ответил за</b>: <code>{ev}</code> s\n" \
+
+    await sent_message.edit_text(out)
+    
 
 @user_router.message(Command("adminlist"))
 @user_router.message(F.text.lower().in_(['кто админ','админы','кто здесь власть']))

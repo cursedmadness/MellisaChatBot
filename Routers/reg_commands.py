@@ -14,7 +14,6 @@ from database import (
 
 reg_router = Router()
 
-
 # Регистрация самой анкеты, берет информацию из БД(будет использоваться и для профиля частично)
 async def get_profile_text(user_id: int) -> str:
     """
@@ -62,7 +61,7 @@ async def start_handler(message: Message):
 # Роутер на смену ника в анкете(и профиле)
 
 @reg_router.message(Command('set_nickname'))
-@reg_router.message(F.text.lower().startswith('сменить ник'), F.chat.type == ChatType.PRIVATE)
+@reg_router.message(F.text.lower().startswith('сменить ник'))
 async def set_nickname_handler(message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
@@ -86,7 +85,7 @@ async def set_nickname_handler(message: Message):
 # Роутер на смену описания для анкеты(и профиля)
 
 @reg_router.message(Command('set_description'))
-@reg_router.message(F.text.lower().startswith('сменить описание'), F.chat.type == ChatType.PRIVATE)
+@reg_router.message(F.text.lower().startswith('сменить описание'))
 async def set_description_handler(message: Message):
     # ... (код без изменений)
     user_id = message.from_user.id
