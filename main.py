@@ -2,9 +2,11 @@
 from Routers import main_router
 from aiogram import Bot, Dispatcher
 import asyncio
-from database import create_table, add_new_columns
+from database import create_table, add_new_columns, initialize_admins
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from Routers.admin_commands import ADMIN_IDS
+
 
 TOKEN = '6695001037:AAG2GsxtOZcFFlvQ9jCzLQy3IhNrSkxmV2Y'
 
@@ -16,6 +18,7 @@ dp.include_router(main_router)
 async def main():
     create_table()
     add_new_columns()
+    initialize_admins(ADMIN_IDS)
     await dp.start_polling(bot)
 
 

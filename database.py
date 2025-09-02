@@ -14,7 +14,7 @@ def create_connection():
     return conn
 
 def create_table():
-    """Создаёт таблицу users, если её нет."""
+    """Создаёт таблицу users и admins, если её нет."""
     conn = create_connection()
     if conn:
         try:
@@ -25,8 +25,14 @@ def create_table():
                     nickname TEXT
                 )
             ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admins (
+                    user_id INTEGER PRIMARY KEY,
+                    first_name TEXT
+                )
+            ''')
             conn.commit()
-            print("Проверка/создание таблицы 'users' выполнено.")
+            print("Проверка/создание таблицы 'users and admins' выполнено.")
         except Error as e:
             print(e)
         finally:
@@ -157,3 +163,94 @@ def set_user_description(user_id: int, description: str):
             print(e)
         finally:
             conn.close()
+
+def add_admin(user_id: int, first_name: str):
+    """Добавляет администратора в таблицу admins."""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR IGNORE INTO admins (user_id, first_name) VALUES (?, ?)", (user_id, first_name))
+            conn.commit()
+            print(f"Администратор {user_id} добавлен с именем {first_name}")
+        except Error as e:
+            print(e)
+        finally:
+            conn.close()
+
+def remove_admin(user_id: int):
+    """Удаляет администратора из таблицы admins."""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
+            conn.commit()
+            print(f"Администратор {user_id} удалён")
+        except Error as e:
+            print(e)
+        finally:
+            conn.close()
+
+def is_admin(user_id: int) -> bool:
+    """Проверяет, является ли пользователь администратором."""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
+            result = cursor.fetchone()
+            return bool(result)
+        except Error as e:
+            print(e)
+        finally:
+            conn.close()
+    return False
+
+def get_all_admins() -> list:
+    """Получает список всех администраторов (user_id и first_name)."""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, first_name FROM admins")
+            return cursor.fetchall()  # Возвращает список кортежей [(user_id, first_name), ...]
+        except Error as e:
+            print(e)
+        finally:
+            conn.close()
+    return []
+
+def initialize_admins(admin_ids: list):
+    """Инициализирует таблицу admins из списка ADMIN_IDS, если она пуста."""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM admins")
+            count = cursor.fetchone()[0]
+            if count == 0:
+                for user_id in admin_ids:
+                    add_admin(user_id, "Администратор")  # Placeholder first_name; можно заменить на реальное через API
+                print("Таблица admins инициализирована из ADMIN_IDS")
+        except Error as e:
+            print(e)
+        finally:
+            conn.close()
+
+
+def get_user_description(user_id: int):
+    """Получает описание пользователя из БД."""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT Описание FROM users WHERE user_id = ?", (user_id,))
+            result = cursor.fetchone()
+            # Возвращаем описание (result[0]) если оно есть, иначе None
+            return result[0] if result else None
+        except Error as e:
+            print(e)
+        finally:
+            conn.close()
+    return None

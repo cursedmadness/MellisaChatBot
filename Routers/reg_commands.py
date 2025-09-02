@@ -3,18 +3,19 @@ from aiogram.types import Message
 from aiogram.filters.command import Command
 import time, datetime
 from aiogram.enums import ChatType
+import asyncio
 from aiogram.enums import ParseMode
 
-# --- ИЗМЕНЕНИЕ 1: Импортируем новую функцию ---
+# Импорт бд
 from database import (
     add_user, get_user_nickname, set_user_nickname,
-    set_user_description, get_user_profile  # Добавили get_user_profile
+    set_user_description, get_user_profile, get_user_description
 )
 
 reg_router = Router()
 
 
-# --- НОВАЯ ФУНКЦИЯ для формирования текста анкеты ---
+# Регистрация самой анкеты, берет информацию из БД(будет использоваться и для профиля частично)
 async def get_profile_text(user_id: int) -> str:
     """
     Получает данные из БД и возвращает готовый текст для анкеты.
@@ -40,7 +41,7 @@ async def get_profile_text(user_id: int) -> str:
         return "Не удалось найти твой профиль. Попробуй написать /start"
 
 
-# --- Хэндлеры, которые у вас уже были ---
+# Стартовый хендлер для запуска регистрации анкеты и профиля(надо переделать графически)
 @reg_router.message(Command('start'))
 async def start_handler(message: Message):
     # ... (код без изменений)
@@ -54,50 +55,63 @@ async def start_handler(message: Message):
     else:
         add_user(user_id, first_name)
         await message.answer(f"Привет, {first_name}! Ты успешно зарегистрирован.")
+        await message.answer(f"{first_name}, теперь ты можешь использовать команду\n"
+                             f"<code>сменить ник</code> или/и <code>сменить описание</code>\n"
+                             f"чтобы добавить оформление анкете.")
 
-
+# Роутер на смену ника в анкете(и профиле)
 
 @reg_router.message(Command('set_nickname'))
-@reg_router.message(F.text.lower().in_('сменить ник'), F.chat.type == ChatType.PRIVATE)
+@reg_router.message(F.text.lower().startswith('сменить ник'), F.chat.type == ChatType.PRIVATE)
 async def set_nickname_handler(message: Message):
-    # ... (код без изменений)
     user_id = message.from_user.id
-    parts = message.text.split(maxsplit=1)
-    
-    if len(parts) > 1:
-        new_nickname = parts[1].strip()
-        set_user_nickname(user_id, new_nickname)
-        await message.answer(f"👍 Ваш ник успешно изменен на: **{new_nickname}**")
-    else:
-        await message.answer("📝 **Ошибка:** Пожалуйста, укажите новый ник после команды.\n"
-                             "Пример: `/set_nickname Ваш_ник`")
+    text = message.text.strip()
 
+    if text.startswith('/set_nickname'):
+        nick = text[13:].strip()
+    elif text.lower().startswith('сменить ник'):
+        nick = text[11:].strip()
+    else:
+        nick = ""       
+
+    if not nick:
+        await message.answer("📝 Ошибка: Пожалуйста, укажите новый ник после команды.\n"
+                             "Пример: /set_nickname Любитель Пива")
+        return
+    else:
+        new_nickname = nick
+        set_user_nickname(user_id, new_nickname)
+        await message.answer(f"👍 Ваш ник успешно изменен на: {new_nickname}")
+
+# Роутер на смену описания для анкеты(и профиля)
 
 @reg_router.message(Command('set_description'))
-@reg_router.message(F.text.lower().in_('сменить описание'), F.chat.type == ChatType.PRIVATE)
+@reg_router.message(F.text.lower().startswith('сменить описание'), F.chat.type == ChatType.PRIVATE)
 async def set_description_handler(message: Message):
     # ... (код без изменений)
     user_id = message.from_user.id
-    parts = message.text.split(maxsplit=1)
+    parts = message.text.strip()
     
-    if len(parts) > 1:
-        new_description = parts[1].strip()
-        
-        if len(new_description) <= 25:
-            set_user_description(user_id, new_description)
-            await message.answer(f"✅ Ваше описание установлено:\n_{new_description}_", parse_mode="Markdown")
-        else:
-            await message.answer(f"❌ **Ошибка:** Описание слишком длинное!\n"
-                                 f"Максимум **25** символов (у вас {len(new_description)}).")
+    if parts.startswith('/set_description'):
+        description = parts[16:].strip()
+    elif parts.lower().startswith('сменить описание'):
+        description = parts[16:].strip()
     else:
-        await message.answer("📝 **Ошибка:** Пожалуйста, напишите описание после команды.\n"
-                             "Пример: `/set_description Я люблю пива")
+        description = ""   
+    if not description:
+        await message.answer("📝 Ошибка: Пожалуйста, укажите новое описание после команды.\n"
+                             "Пример: /set_nickname Люблю светлое пиво")
+        return
+    else:
+        new_description = description
+        set_user_description(user_id, description)
+        await message.answer(f"👍 Ваше описание успешно изменено на: {new_description}")
 
 
-# --- НОВЫЙ ХЭНДЛЕР для команды /anketa ---
+# Роутер 'Анкета' - выводит анкету с данными в лс бота(будет отличаться от профиля внутри чата(возможно))
 
 @reg_router.message(Command('anketa'))
-@reg_router.message(F.text.lower().in_(['анкета']), F.chat.type == ChatType.PRIVATE)
+@reg_router.message(F.text.lower().in_(['анкета','моя анкета']), F.chat.type == ChatType.PRIVATE)
 async def profile_handler(message: Message):
     """
     Отправляет пользователю его анкету.
@@ -107,3 +121,57 @@ async def profile_handler(message: Message):
     profile_text = await get_profile_text(user_id)
     
     await message.answer(profile_text, parse_mode="Markdown")
+
+
+@reg_router.message(F.text.lower().in_('-ник'))
+async def reset_nickname_handler(message: Message):
+    """
+    Сбрасывает ник пользователя к его имени в Telegram.
+    """
+    user_id = message.from_user.id
+    # Получаем first_name, чтобы использовать его как ник по умолчанию
+    first_name = message.from_user.first_name or "пользователь"
+    
+    set_user_nickname(user_id, first_name)
+    
+    await message.answer(f"✅ Ваш ник сброшен. Теперь он: **{first_name}**", parse_mode="Markdown")
+
+# --- НОВЫЙ ХЭНДЛЕР для очистки описания ---
+@reg_router.message(F.text.lower().in_('-описание'))
+async def clear_description_handler(message: Message):
+    """
+    Очищает описание профиля пользователя.
+    """
+    user_id = message.from_user.id
+    
+    # Устанавливаем в базе данных значение None (которое мы потом интерпретируем как "Не указано")
+    # Либо можно передать пустую строку "", результат будет тот же.
+    set_user_description(user_id, None) 
+    
+    await message.answer("🗑️ Ваше описание было очищено.")
+
+
+@reg_router.message(F.text.lower().in_('мой ник'))
+async def show_my_nickname(message: Message):
+    user_id = message.from_user.id
+    nickname = get_user_nickname(user_id)
+    
+    # Проверяем, зарегистрирован ли пользователь
+    if nickname:
+        await message.answer(f"📝 Твой текущий ник: **{nickname}**", parse_mode="Markdown")
+    else:
+        await message.answer("Я тебя ещё не знаю. Напиши /start для регистрации.")
+
+
+# --- НОВЫЙ ХЭНДЛЕР для вывода описания ---
+@reg_router.message(F.text.lower().in_('моё описание'))
+async def show_my_description(message: Message):
+    user_id = message.from_user.id
+    description = get_user_description(user_id)
+    
+    # Проверяем, есть ли описание
+    if description:
+        await message.answer(f"📄 Твоё описание:\n_{description}_", parse_mode="Markdown")
+    else:
+        # Эта ветка сработает, если описание None или если пользователь не зарегистрирован
+        await message.answer("У тебя пока нет описания. Можешь добавить его командой `/set_description`.", parse_mode="Markdown")

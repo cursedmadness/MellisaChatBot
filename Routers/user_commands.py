@@ -6,12 +6,31 @@ import os
 from deep_translator import GoogleTranslator
 from pydub import AudioSegment
 
+from Routers.admin_commands import ADMIN_IDS
+from database import get_all_admins
 
 user_router = Router()
 
-AudioSegment.converter = "D:\\bots\\coder\\ffmpeg.exe"
+"""AudioSegment.converter = "D:\\bots\\coder\\ffmpeg.exe"
 AudioSegment.ffmpeg = "D:\\bots\\coder\\ffmpeg.exe"
-AudioSegment.ffprobe = "D:\\bots\\coder\\ffprobe.exe"
+AudioSegment.ffprobe = "D:\\bots\\coder\\ffprobe.exe" """
+
+
+@user_router.message(Command("adminlist"))
+@user_router.message(F.text.lower().in_(['кто админ','админы','кто здесь власть']))
+async def admin_list_command(message: Message):
+    # Получаем список администраторов
+    admins = get_all_admins()
+    if not admins:
+        await message.answer("Список администраторов пуст.")
+        return
+
+    # Формируем ответ с HTML-разметкой
+    admin_list_text = "<b>Наши администраторы:</b>\n"
+    for user_id, first_name in admins:
+        admin_list_text += f"- <a href='tg://user?id={user_id}'>{first_name}</a> (ID: {user_id})\n"
+
+    await message.answer(admin_list_text, parse_mode='HTML')
 
 
 @user_router.message(Command('voice'))
