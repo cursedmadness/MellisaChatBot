@@ -1,8 +1,8 @@
 from aiogram import Router, F
 from aiogram.filters.command import Command
 from aiogram.types import Message
-from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramBadRequest
+# from aiogram.enums import ChatType
+# from aiogram.exceptions import TelegramBadRequest
 from database import increment_user_activity, get_chat_leaderboard
 activity_routers = Router() # подключение роутеров
 
