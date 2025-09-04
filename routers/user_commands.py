@@ -175,7 +175,7 @@ async def show_my_description(message: Message):
         await message.answer("У тебя пока нет описания. Можешь добавить его командой `/set_description`.", parse_mode="Markdown")
 
 @user_router.message(Command('my_rate'))
-@user_router.message(F.text.lower().in_['мой рейтинг'])
+@user_router.message(F.text.lower().in_(['мой рейтинг']))
 async def my_rate(message: Message):
     user_id = message.from_user.id
     rate = get_user_rate(user_id)
