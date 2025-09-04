@@ -8,7 +8,8 @@ from aiogram.enums import ParseMode
 from Routers.admin_commands import ADMIN_IDS
 
 
-TOKEN = '6695001037:AAG2GsxtOZcFFlvQ9jCzLQy3IhNrSkxmV2Y' # Изучить .env для защиты
+# TOKEN = '6695001037:AAG2GsxtOZcFFlvQ9jCzLQy3IhNrSkxmV2Y' # Основной бот
+TOKEN = '7753431963:AAGWJK3j1XvDrYgFjFxneWvHLV5iBBUOBeA' # Тестовый бот | Для Кая
 
 bot=Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML)) # Подключение бота(с оформлением смс)
 dp=Dispatcher()
@@ -26,4 +27,4 @@ if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print('Выключено блять.')
+        pass

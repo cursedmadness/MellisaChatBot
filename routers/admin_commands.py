@@ -4,7 +4,7 @@ from aiogram.types import Message
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
 
-from database import get_all_admins, is_admin,add_admin, remove_admin
+from database import get_all_admins, is_admin,add_admin, remove_admin, get_user_rate
 
 ADMIN_IDS = [1534963580, 1103985703, 5806584445] # - ИД администраторов, у кого есть доступ к командам. Нужно будет настроить через бд.
 
@@ -195,3 +195,29 @@ async def remove_admin_command(message: Message, bot: 'Bot'): # type: ignore
         f"Пользователь <a href='tg://user?id={target_user.id}'>{target_user.first_name}</a> удалён из администраторов!",
         parse_mode='HTML'
     )
+
+
+@admin_router.message(Command('add_rate'))
+@admin_router.message(F.text.lower().startswith("+рейт"))
+async def add_rate(message: Message):
+    message = message.text.strip()
+    
+    if message.startswith("+рейт"):
+        args = message[5:]
+    elif message.startswith("/add_rate"):
+        args = message[9:]
+
+    if not args:
+        await message.reply("Вы не указали количество выдаваемого рейтинга")
+
+    if reply.message:
+        user_id = message.reply_to_message.from_user.id
+        rate = get_user_rate(user_id)
+        rate += args
+        await message.reply("Пользователю было выдано {rate} рейтинга.\nПартия гордится пользователем!")
+
+    else:
+        user_id = message.from_user.id
+        rate = get_user_rate(user_id)
+        rate += args
+        await message.reply("Вы выдали себе {rate} рейтинга.\nПартия недовольна Вашей жадностью!")

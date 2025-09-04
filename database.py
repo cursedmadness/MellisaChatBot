@@ -255,6 +255,22 @@ def get_user_description(user_id: int):
             conn.close()
     return None
 
+def get_user_rate(user_id: int)
+"""Получает рейтинг пользователя из БД."""
+    conn = create_connection()
+    if conn:
+        try: 
+            cursor = conn.cursor()
+            cursor.execute("SELECT Рейтинг FROM users WHERE user_id = ?", (user_ud,))
+            result = cursor.fetchone()
+            # Возвращаем рейтинг (result[0]) если оно есть
+            return result[0] if result else None
+        except Exception as e:
+            print(e)
+        finally:
+            conn.close()
+    return None 
+
 # Добавьте эти функции в ваш файл database.py
 
 def increment_user_activity(user_id: int):
