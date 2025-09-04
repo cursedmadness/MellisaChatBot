@@ -1,10 +1,13 @@
 from aiogram import Router, F
 from aiogram.filters.command import Command
 from aiogram.types import Message
-from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
 
-from database import get_all_admins, is_admin,add_admin, remove_admin, get_user_rate
+from database import (
+    is_admin,add_admin, 
+    remove_admin, get_user_rate,
+    get_user_rate, update_user_rate
+)
 
 ADMIN_IDS = [1534963580, 1103985703, 5806584445] # - ИД администраторов, у кого есть доступ к командам. Нужно будет настроить через бд.
 
@@ -200,16 +203,18 @@ async def remove_admin_command(message: Message, bot: 'Bot'): # type: ignore
 @admin_router.message(F.text.lower().startswith("+рейтинг"))
 async def add_rate(message: Message):
     try:
+        # Получаем текст сообщения
         text = message.text.strip()
         
         if text.startswith("+рейтинг"):
-            args = text[8:].strip()
+            args = text[8:].strip()  # Убираем лишние пробелы
             
             if not args:
                 await message.reply("Вы не указали количество выдаваемого рейтинга!")
                 return
             
             try:
+                # Преобразуем аргумент в число
                 rate_to_add = int(args)
                 
                 if rate_to_add <= 0:
@@ -217,20 +222,23 @@ async def add_rate(message: Message):
                     return
                 
                 if message.reply_to_message:
+                    # Выдача рейтинга другому пользователю
                     user_id = message.reply_to_message.from_user.id
                     current_rate = get_user_rate(user_id)
                     new_rate = current_rate + rate_to_add
                     
-                    current_rate = new_rate
+                    # функция для обновления рейтинга в БД
+                    update_user_rate(user_id, new_rate)
                     
-                    await message.reply(f"Пользователю {message.reply_to_message.from_user.first_name} выдано {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
+                    await message.reply(f"Пользователю выдано {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
                 
                 else:
+                    # Выдача рейтинга себе
                     user_id = message.from_user.id
                     current_rate = get_user_rate(user_id)
                     new_rate = current_rate + rate_to_add
                     
-                    current_rate = new_rate
+                    update_user_rate(user_id, new_rate)
                     
                     await message.reply(f"Вы выдали себе {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
             
@@ -240,3 +248,58 @@ async def add_rate(message: Message):
     except Exception as e:
         await message.answer(f'Ошибка: {e}')
 
+
+@admin_router.message(F.text.lower().startswith("-рейтинг"))
+async def add_rate(message: Message):
+    try:
+        # Получаем текст сообщения
+        text = message.text.strip()
+        
+        if text.startswith("-рейтинг"):
+            args = text[8:].strip()  # Убираем лишние пробелы
+            
+            if not args:
+                await message.reply("Вы не указали количество выдаваемого рейтинга!")
+                return
+            
+            try:
+                # Преобразуем аргумент в число
+                rate_to_keep = int(args)
+                
+                if rate_to_keep >= 0:
+                    await message.reply("Количество рейтинга должно быть отрицательным числом!")
+                    return
+                
+                if message.reply_to_message:
+                    # Выдача рейтинга другому пользователю
+                    user_id = message.reply_to_message.from_user.id
+                    current_rate = get_user_rate(user_id)
+                    new_rate = current_rate - rate_to_keep
+                    
+                    if new_rate < -500:
+                        await message.reply("У пользователя уже минимальный рейтинг!")
+                        return
+                    else:
+                        update_user_rate(user_id, new_rate)
+                    
+                    await message.reply(f"У пользователя снято {rate_to_keep} рейтинга. Новый рейтинг: {new_rate}")
+                
+                else:
+                    # Выдача рейтинга себе
+                    user_id = message.from_user.id
+                    current_rate = get_user_rate(user_id)
+                    new_rate = current_rate - rate_to_keep
+                    
+                    if new_rate < -500:
+                        await message.reply("У Вас уже минимальный рейтинг!")
+                        return
+                    else:
+                        update_user_rate(user_id, new_rate)
+                    
+                    await message.reply(f"Вы сняли себе {rate_to_keep} рейтинга. Новый рейтинг: {new_rate}")
+            
+            except ValueError:
+                await message.reply("Количество рейтинга должно быть числом!")
+    
+    except Exception as e:
+        await message.answer(f'Ошибка: {e}')

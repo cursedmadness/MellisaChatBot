@@ -1,43 +1,14 @@
 from aiogram import Router, F
 from aiogram.filters.command import Command
 from aiogram.types import Message
-from aiogram.enums import ChatType
-import os
-import time, datetime
-from routers.admin_commands import ADMIN_IDS
-from database import get_all_admins
+import datetime
 from database import (
     add_user, get_user_nickname, set_user_nickname,
-    set_user_description, get_user_profile, get_user_description,
-    get_user_rate
+    set_user_description, get_profile_text, get_user_description,
+    get_user_rate, get_all_admins
 )
 
 user_router = Router() # подключение роутеров
-
-# Регистрация самой анкеты, берет информацию из БД(будет использоваться и для профиля частично)
-async def get_profile_text(user_id: int) -> str:
-    """
-    Получает данные из БД и возвращает готовый текст для анкеты.
-    Эту функцию можно будет использовать в любом роутере.
-    """
-    profile_data = get_user_profile(user_id)
-    
-    if profile_data:
-        # Если в поле описания ничего нет (None), заменяем на "Не указано"
-        description = profile_data.get("description") or "Не указано"
-
-        # Собираем красивое сообщение
-        text = (
-            f"👤 **Досье гражданина**\n\n"
-            f"🗃️ **Учётное имя:** `{profile_data['nickname']}`\n"
-            f"🆔 **Публичный цифровой идентификатор:** `{user_id}`\n\n"
-            f"🍚 **Социальный рейтинг:** {profile_data['reputation']}\n"
-            f"☀️ **Активность:** {profile_data['activity']}\n\n"
-            f"📄 **Описание:**\n_{description}_"
-        )
-        return text
-    else:
-        return "Не удалось найти твой профиль. Попробуй написать /start"
 
 # Стартовый хендлер для запуска регистрации анкеты
 @user_router.message(Command('start'))
@@ -183,27 +154,27 @@ async def my_rate(message: Message):
     # Достаем рейтинг
     if 5001 <= rate <= 10000:
         rank = "S"
-        await message.reply(f"👑 Ваш социальный рейтинг: 5001-10000 и выше\nТекущий ранг в партии: {rank}")
+        await message.reply(f"👑 Ваш социальный рейтинг: 5001-10000 и выше ({rank})")
 
     elif 3501 <= rate <= 5000:
         rank = "A"
-        await message.reply(f"🐉 Ваш социальный рейтинг: 3501-5000\nТекущий ранг в партии: {rank}")
+        await message.reply(f"🐉 Ваш социальный рейтинг: 3501-5000 ({rank})")
 
     elif 1001 <= rate <= 3500:
         rank = "B"
-        await message.reply(f"☀️ Ваш социальный рейтинг: 1001-3500\nТекущий ранг в партии: {rank}")
+        await message.reply(f"☀️ Ваш социальный рейтинг: 1001-3500 ({rank})")
 
     elif 51 <= rate <= 1000:
         rank = "C"
-        await message.reply(f"🍀 Ваш социальный рейтинг: 51-1000\nТекущий ранг в партии: {rank}")
+        await message.reply(f"🍀 Ваш социальный рейтинг: 51-1000 ({rank})")
 
     elif -500 <= rate <= 50:
         rank = "D"
-        await message.reply(f"🍀 Ваш социальный рейтинг: 51-1000\nТекущий ранг в партии: {rank}")
+        await message.reply(f"🍀 Ваш социальный рейтинг: 51-1000 ({rank})")
 
     elif rate <= -500:
         rank = "F"
-        await message.reply(f"☠️ Ваш социальный рейтинг: -500 и ниже\nТекущий ранг в партии: {rank}")        
+        await message.reply(f"☠️ Ваш социальный рейтинг: -500 и ниже ({rank})")        
 
 # Роутер-пинг. банально.
 @user_router.message(Command('ping'))
@@ -216,9 +187,9 @@ async def ping_bot(message: Message): # type: ignore
 
     # Проверяем значение пинга и выбираем текст ответа
     if ev < ping_threshold_sec:
-        out = f"🏓 Партия выиграла в пинг-понг за <code>{ev}</code> с"
+        out = f"🏓 Партия выиграла в пинг-понг за <code>{ev}</code> мс"
     else:
-        out = f"🏓 Партия проиграла в пинг-понг за <code>{ev}</code> с"
+        out = f"🏓 Партия проиграла в пинг-понг за <code>{ev}</code> мс"
     
     # Редактируем сообщение с окончательным ответом
     await sent_message.edit_text(out)
