@@ -6,7 +6,6 @@ import os
 import time, datetime
 from routers.admin_commands import ADMIN_IDS
 from database import get_all_admins
-from reg_commands import get_profile_text
 from database import (
     add_user, get_user_nickname, set_user_nickname,
     set_user_description, get_user_profile, get_user_description,
@@ -14,6 +13,31 @@ from database import (
 )
 
 user_router = Router() # подключение роутеров
+
+# Регистрация самой анкеты, берет информацию из БД(будет использоваться и для профиля частично)
+async def get_profile_text(user_id: int) -> str:
+    """
+    Получает данные из БД и возвращает готовый текст для анкеты.
+    Эту функцию можно будет использовать в любом роутере.
+    """
+    profile_data = get_user_profile(user_id)
+    
+    if profile_data:
+        # Если в поле описания ничего нет (None), заменяем на "Не указано"
+        description = profile_data.get("description") or "Не указано"
+
+        # Собираем красивое сообщение
+        text = (
+            f"👤 **Досье гражданина**\n\n"
+            f"🗃️ **Учётное имя:** `{profile_data['nickname']}`\n"
+            f"🆔 **Публичный цифровой идентификатор:** `{user_id}`\n\n"
+            f"🍚 **Социальный рейтинг:** {profile_data['reputation']}\n"
+            f"☀️ **Активность:** {profile_data['activity']}\n\n"
+            f"📄 **Описание:**\n_{description}_"
+        )
+        return text
+    else:
+        return "Не удалось найти твой профиль. Попробуй написать /start"
 
 # Стартовый хендлер для запуска регистрации анкеты
 @user_router.message(Command('start'))
