@@ -261,7 +261,7 @@ def get_user_rate(user_id: int)
     if conn:
         try: 
             cursor = conn.cursor()
-            cursor.execute("SELECT Рейтинг FROM users WHERE user_id = ?", (user_ud,))
+            cursor.execute("SELECT Репутация FROM users WHERE user_id = ?", (user_ud,))
             result = cursor.fetchone()
             # Возвращаем рейтинг (result[0]) если оно есть
             return result[0] if result else None
