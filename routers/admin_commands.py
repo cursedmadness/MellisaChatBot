@@ -189,7 +189,7 @@ async def remove_admin_command(message: Message, bot: 'Bot'): # type: ignore
         await message.answer("Вы не можете удалить себя из администраторов!")
         return
 
-    # Удаляем администратора
+    # Удаляем администратораf
     remove_admin(target_user.id)
     await message.answer(
         f"Пользователь <a href='tg://user?id={target_user.id}'>{target_user.first_name}</a> удалён из администраторов!",
