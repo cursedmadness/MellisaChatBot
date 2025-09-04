@@ -8,8 +8,8 @@ from aiogram.enums import ParseMode
 from routers.admin_commands import ADMIN_IDS
 
 
-# TOKEN = '6695001037:AAG2GsxtOZcFFlvQ9jCzLQy3IhNrSkxmV2Y' # Основной бот
-TOKEN = '7753431963:AAGWJK3j1XvDrYgFjFxneWvHLV5iBBUOBeA' # Тестовый бот | Для Кая
+TOKEN = '6695001037:AAG2GsxtOZcFFlvQ9jCzLQy3IhNrSkxmV2Y' # Основной бот
+# TOKEN = '7753431963:AAGWJK3j1XvDrYgFjFxneWvHLV5iBBUOBeA' # Тестовый бот | Для Кая
 
 bot=Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML)) # Подключение бота(с оформлением смс)
 dp=Dispatcher()
