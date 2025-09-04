@@ -276,11 +276,7 @@ async def add_rate(message: Message):
                     current_rate = get_user_rate(user_id)
                     new_rate = current_rate - rate_to_keep
                     
-                    if new_rate < -500:
-                        await message.reply("У пользователя уже минимальный рейтинг!")
-                        return
-                    else:
-                        update_user_rate(user_id, new_rate)
+                    update_user_rate(user_id, new_rate)
                     
                     await message.reply(f"У пользователя снято {rate_to_keep} рейтинга. Новый рейтинг: {new_rate}")
                 
@@ -289,12 +285,8 @@ async def add_rate(message: Message):
                     user_id = message.from_user.id
                     current_rate = get_user_rate(user_id)
                     new_rate = current_rate - rate_to_keep
-                    
-                    if new_rate < -500:
-                        await message.reply("У Вас уже минимальный рейтинг!")
-                        return
-                    else:
-                        update_user_rate(user_id, new_rate)
+                
+                    update_user_rate(user_id, new_rate)
                     
                     await message.reply(f"Вы сняли себе {rate_to_keep} рейтинга. Новый рейтинг: {new_rate}")
             
