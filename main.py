@@ -1,11 +1,11 @@
 #main.py 
-from Routers import main_router
+from routers import main_router
 from aiogram import Bot, Dispatcher
 import asyncio
 from database import create_table, add_new_columns, initialize_admins
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from Routers.admin_commands import ADMIN_IDS
+from routers.admin_commands import ADMIN_IDS
 
 
 # TOKEN = '6695001037:AAG2GsxtOZcFFlvQ9jCzLQy3IhNrSkxmV2Y' # Основной бот

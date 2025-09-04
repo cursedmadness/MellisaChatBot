@@ -203,19 +203,19 @@ async def add_rate(message: Message):
             if message.strip().startswith("+рейтинг"):
                 args = message[8:]
         
-                    if not args:
-                        await message.reply("Вы не указали количество выдаваемого рейтинга!")
-                    else:
-                            if message.reply_to_message:
+                if not args:
+                    await message.reply("Вы не указали количество выдаваемого рейтинга!")
+                else:
+                        if message.reply_to_message:
                                 user_id = message.reply_to_message.from_user.id
                                 rate = get_user_rate(user_id)
                                 rate += args
                                 await message.reply(f"Пользователю было выдано {rate} рейтинга")
         
-                            else:
+                        else:
                                 user_id = message.from_user.id
                                 rate = get_user_rate(user_id)
                                 rate += args
-                                await message.reply(f"Вы выдали себе {rate} рейтинга")
+                        await message.reply(f"Вы выдали себе {rate} рейтинга")
         except Exception as e:
                 await message.answer(f'{e}')
