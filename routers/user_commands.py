@@ -33,7 +33,7 @@ async def start_handler(message: Message):
 # Роутер на смену ника в анкете
 
 @user_router.message(Command('set_nickname'))
-@ruser_router.message(F.text.lower().startswith('сменить имя'))
+@user_router.message(F.text.lower().startswith('сменить имя'))
 async def set_nickname_handler(message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
@@ -81,8 +81,8 @@ async def set_description_handler(message: Message):
 
 # Роутер 'Анкета' - выводит анкету с данными в лс бота(будет отличаться от профиля внутри чата(возможно))
 
-@reg_router.message(Command('anketa'))
-@reg_router.message(F.text.lower().in_(['анкета','досье']))
+@user_router.message(Command('anketa'))
+@user_router.message(F.text.lower().in_(['анкета','досье']))
 async def profile_handler(message: Message):
     """
     Отправляет пользователю его анкету.
