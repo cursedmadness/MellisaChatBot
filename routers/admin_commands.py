@@ -197,28 +197,25 @@ async def remove_admin_command(message: Message, bot: 'Bot'): # type: ignore
     )
 
 
-@admin_router.message(Command('add_rate'))
-@admin_router.message(F.text.lower().startswith("+рейт"))
+@admin_router.message(F.text.lower().startswith("+рейтинг"))
 async def add_rate(message: Message):
     message = message.text.strip()
     reply = message.reply_to_message
         
-    if message.startswith("+рейт"):
-        args = message[5:]
-    elif message.startswith("/add_rate"):
-        args = message[9:]
+    if message.startswith("+рейтинг"):
+        args = message[8:]
 
     if not args:
-        await message.reply("Вы не указали количество выдаваемого рейтинга")
+        await message.reply("Вы не указали количество выдаваемого рейтинга!")
 
     if reply:
         user_id = reply.from_user.id
         rate = get_user_rate(user_id)
         rate += args
-        await message.reply("Пользователю было выдано {rate} рейтинга.\nПартия гордится пользователем!")
+        await message.reply(f"Пользователю было выдано {rate} рейтинга.\nПартия гордится пользователем!")
 
     else:
         user_id = message.from_user.id
         rate = get_user_rate(user_id)
         rate += args
-        await message.reply("Вы выдали себе {rate} рейтинга.\nПартия недовольна Вашей жадностью!")
+        await message.reply(f"Вы выдали себе {rate} рейтинга.\nПартия недовольна Вашей жадностью!")
