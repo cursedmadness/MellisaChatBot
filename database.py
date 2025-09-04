@@ -275,11 +275,9 @@ def update_user_rate(user_id: int, rate: int):
     conn = create_connection()
     cursor = conn.cursor()
     
-    # Используем INSERT OR REPLACE для обновления существующей записи
     cursor.execute('''
-        INSERT OR REPLACE INTO users (user_id, Репутация)
-        VALUES (?, ?)
-    ''', (user_id, rate))
+    UPDATE users SET rate = ? WHERE user_id = ?
+''', (rate, user_id))
     
     conn.commit()
     conn.close()
