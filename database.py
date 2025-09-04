@@ -256,25 +256,32 @@ def get_user_description(user_id: int):
     return None
 
 def get_user_rate(user_id: int) -> int:
-    """Получает рейтинг пользователя из БД."""
-    conn = create_connection()
-    if conn:
-        try: 
-            cursor = conn.cursor()
-            cursor.execute("SELECT Репутация FROM users WHERE user_id = ?", (user_id,))
-            result = cursor.fetchone()
-            # Возвращаем рейтинг (result[0]) если оно есть
-            return result[0] if result else None
-        except Exception as e:
-            print(e)
-        finally:
-            conn.close()
-    return None 
-
-def update_user_rate(user_id: int, new_rate: int):
     conn = create_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET Репутация = ? WHERE user_id = ?", (new_rate, user_id))
+    
+    cursor.execute('SELECT Репутация FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    
+    conn.close()
+    
+    if result:
+        return result[0]
+    else:
+        # Если пользователя нет в базе, создаем запись
+        update_user_rate(user_id, 0)
+        return 0
+
+def update_user_rate(user_id: int, rate: int):
+    conn = create_connection()
+    cursor = conn.cursor()
+    
+    # Используем INSERT OR REPLACE для обновления существующей записи
+    cursor.execute('''
+        INSERT OR REPLACE INTO users (user_id, Репутация)
+        VALUES (?, ?)
+    ''', (user_id, rate))
+    
+    conn.commit()
     conn.close()
 
 

@@ -224,23 +224,23 @@ async def add_rate(message: Message):
                 if message.reply_to_message:
                     # Выдача рейтинга другому пользователю
                     user_id = message.reply_to_message.from_user.id
-                    current_rate = get_user_rate(user_id)
-                    new_rate = current_rate + rate_to_add
+                    rate = get_user_rate(user_id)
+                    rate += rate_to_add
                     
                     # функция для обновления рейтинга в БД
-                    update_user_rate(user_id, new_rate)
+                    update_user_rate(user_id, rate)
                     
-                    await message.reply(f"Пользователю выдано {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
+                    await message.reply(f"Пользователю выдано {rate_to_add} рейтинга. Новый рейтинг: {rate}")
                 
                 else:
                     # Выдача рейтинга себе
                     user_id = message.from_user.id
-                    current_rate = get_user_rate(user_id)
-                    new_rate = current_rate + rate_to_add
+                    rate = get_user_rate(user_id)
+                    rate += rate_to_add
                     
-                    update_user_rate(user_id, new_rate)
+                    update_user_rate(user_id, rate)
                     
-                    await message.reply(f"Вы выдали себе {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
+                    await message.reply(f"Вы выдали себе {rate_to_add} рейтинга. Новый рейтинг: {rate}")
             
             except ValueError:
                 await message.reply("Количество рейтинга должно быть числом!")
@@ -273,22 +273,22 @@ async def add_rate(message: Message):
                 if message.reply_to_message:
                     # Выдача рейтинга другому пользователю
                     user_id = message.reply_to_message.from_user.id
-                    current_rate = get_user_rate(user_id)
-                    new_rate = current_rate - rate_to_keep
+                    rate = get_user_rate(user_id)
+                    rate -= rate_to_keep
                     
-                    update_user_rate(user_id, new_rate)
+                    update_user_rate(user_id, rate)
                     
-                    await message.reply(f"У пользователя снято {rate_to_keep} рейтинга. Новый рейтинг: {new_rate}")
+                    await message.reply(f"У пользователя снято {rate_to_keep} рейтинга. Новый рейтинг: {rate}")
                 
                 else:
                     # Выдача рейтинга себе
                     user_id = message.from_user.id
-                    current_rate = get_user_rate(user_id)
-                    new_rate = current_rate - rate_to_keep
+                    rate = get_user_rate(user_id)
+                    rate -= rate_to_keep
                 
-                    update_user_rate(user_id, new_rate)
+                    update_user_rate(user_id, rate)
                     
-                    await message.reply(f"Вы сняли себе {rate_to_keep} рейтинга. Новый рейтинг: {new_rate}")
+                    await message.reply(f"Вы сняли себе {rate_to_keep} рейтинга. Новый рейтинг: {rate}")
             
             except ValueError:
                 await message.reply("Количество рейтинга должно быть числом!")
