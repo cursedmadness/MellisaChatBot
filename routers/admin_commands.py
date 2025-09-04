@@ -199,23 +199,44 @@ async def remove_admin_command(message: Message, bot: 'Bot'): # type: ignore
 
 @admin_router.message(F.text.lower().startswith("+рейтинг"))
 async def add_rate(message: Message):
-        try:
-            if message.strip().startswith("+рейтинг"):
-                args = message[8:]
+    try:
+        text = message.text.strip()
         
-                if not args:
-                    await message.reply("Вы не указали количество выдаваемого рейтинга!")
+        if text.startswith("+рейтинг"):
+            args = text[8:].strip()
+            
+            if not args:
+                await message.reply("Вы не указали количество выдаваемого рейтинга!")
+                return
+            
+            try:
+                rate_to_add = int(args)
+                
+                if rate_to_add <= 0:
+                    await message.reply("Количество рейтинга должно быть положительным числом!")
+                    return
+                
+                if message.reply_to_message:
+                    user_id = message.reply_to_message.from_user.id
+                    current_rate = get_user_rate(user_id)
+                    new_rate = current_rate + rate_to_add
+                    
+                    current_rate = new_rate
+                    
+                    await message.reply(f"Пользователю {message.reply_to_message.from_user.first_name} выдано {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
+                
                 else:
-                        if message.reply_to_message:
-                                user_id = message.reply_to_message.from_user.id
-                                rate = get_user_rate(user_id)
-                                rate += args
-                                await message.reply(f"Пользователю было выдано {rate} рейтинга")
-        
-                        else:
-                                user_id = message.from_user.id
-                                rate = get_user_rate(user_id)
-                                rate += args
-                        await message.reply(f"Вы выдали себе {rate} рейтинга")
-        except Exception as e:
-                await message.answer(f'{e}')
+                    user_id = message.from_user.id
+                    current_rate = get_user_rate(user_id)
+                    new_rate = current_rate + rate_to_add
+                    
+                    current_rate = new_rate
+                    
+                    await message.reply(f"Вы выдали себе {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
+            
+            except ValueError:
+                await message.reply("Количество рейтинга должно быть числом!")
+    
+    except Exception as e:
+        await message.answer(f'Ошибка: {e}')
+
