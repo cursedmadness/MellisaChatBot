@@ -201,7 +201,8 @@ async def remove_admin_command(message: Message, bot: 'Bot'): # type: ignore
 @admin_router.message(F.text.lower().startswith("+рейт"))
 async def add_rate(message: Message):
     message = message.text.strip()
-    
+    reply = message.reply_to_message
+        
     if message.startswith("+рейт"):
         args = message[5:]
     elif message.startswith("/add_rate"):
@@ -210,8 +211,8 @@ async def add_rate(message: Message):
     if not args:
         await message.reply("Вы не указали количество выдаваемого рейтинга")
 
-    if reply.message:
-        user_id = message.reply_to_message.from_user.id
+    if reply:
+        user_id = reply.from_user.id
         rate = get_user_rate(user_id)
         rate += args
         await message.reply("Пользователю было выдано {rate} рейтинга.\nПартия гордится пользователем!")
