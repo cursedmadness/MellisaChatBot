@@ -176,7 +176,7 @@
 #         rank = "F"
 #         await message.reply(f"☠️ Ваш социальный рейтинг: -500 и ниже ({rank})")        
 
-# # Роутер-пинг. банально.
+# Роутер-пинг. банально.
 # @user_router.message(Command('ping'))
 # @user_router.message(F.text.lower().in_(['пинг','социальный пинг-понг']))
 # async def ping_bot(message: Message): # type: ignore
@@ -370,18 +370,19 @@ async def my_rate(message: Message):
 # Роутер-пинг
 @user_router.message(Command('ping'))
 @user_router.message(F.text.lower().in_(['пинг','социальный пинг-понг']))
-async def ping_bot(message: Message):
-    ev = (datetime.datetime.now() - message.date.replace(tzinfo=None)).total_seconds() * 1000
-    
+async def ping_bot(message: Message): # type: ignore
+    ev = (datetime.datetime.now() - message.date.replace(tzinfo=None)).microseconds / 1000000
     sent_message = await message.answer("🤖 Измеряю пинг...")
-    
-    ping_threshold_ms = 50  # 0.05 секунды в миллисекундах
+     # Устанавливаем порог для пинга
+    ping_threshold_sec = 0.5
 
-    if ev < ping_threshold_ms:
-        out = f"🏓 Партия выиграла в пинг-понг за {ev:.0f} мс"
+    # Проверяем значение пинга и выбираем текст ответа
+    if ev < ping_threshold_sec:
+        out = f"🏓 Партия выиграла в пинг-понг за <code>{ev}</code> мс"
     else:
-        out = f"🏓 Партия проиграла в пинг-понг за {ev:.0f} мс"
+        out = f"🏓 Партия проиграла в пинг-понг за <code>{ev}</code> мс"
     
+    # Редактируем сообщение с окончательным ответом
     await sent_message.edit_text(out)
 
 # Роутер вывода списка администраторов

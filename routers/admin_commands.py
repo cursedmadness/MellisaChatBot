@@ -519,14 +519,14 @@ async def remove_rate(message: Message):
                 if message.reply_to_message:
                     user_id = message.reply_to_message.from_user.id
                     current_rate = get_user_rate(user_id)
-                    new_rate = max(0, current_rate - rate_to_remove)  # Не даем уйти в минус
+                    new_rate = current_rate - rate_to_remove  # Не даем уйти в минус
                     update_user_rate(user_id, new_rate)
                     
                     await message.reply(f"У пользователя снято {rate_to_remove} рейтинга. Новый рейтинг: {new_rate}")
                 else:
                     user_id = message.from_user.id
                     current_rate = get_user_rate(user_id)
-                    new_rate = max(0, current_rate - rate_to_remove)
+                    new_rate = current_rate - rate_to_remove
                     update_user_rate(user_id, new_rate)
                     
                     await message.reply(f"Вы сняли себе {rate_to_remove} рейтинга. Новый рейтинг: {new_rate}")
