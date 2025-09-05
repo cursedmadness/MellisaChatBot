@@ -208,8 +208,6 @@ async def add_rate(message: Message):
         
         if text.lower().startswith("+рейтинг"):
             args = text[8:].strip()
-        elif text.lower().startswith("+рейт"):
-            args = text[5:].strip()
             
             if not args:
                 await message.reply("Вы не указали количество выдаваемого рейтинга!")
