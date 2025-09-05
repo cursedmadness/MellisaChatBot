@@ -129,7 +129,7 @@ def get_user_profile(user_id: int):
             cursor = conn.cursor()
             # Выбираем все нужные поля одним запросом
             cursor.execute("""
-                SELECT nickname, Description, Reputation, User_activity
+                SELECT nickname, description, reputation, user_activity
                 FROM users WHERE user_id = ?
             """, (user_id,))
             result = cursor.fetchone()
@@ -156,7 +156,7 @@ def set_user_description(user_id: int, description: str):
         try:
             cursor = conn.cursor()
             # Название столбца 'Описание' берем из предыдущего шага
-            cursor.execute("UPDATE users SET Description = ? WHERE user_id = ?", (description, user_id))
+            cursor.execute("UPDATE users SET description = ? WHERE user_id = ?", (description, user_id))
             conn.commit()
             print(f"Описание для {user_id} установлено.")
         except Error as e:
@@ -245,7 +245,7 @@ def get_user_description(user_id: int):
     if conn:
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT Description FROM users WHERE user_id = ?", (user_id,))
+            cursor.execute("SELECT description FROM users WHERE user_id = ?", (user_id,))
             result = cursor.fetchone()
             # Возвращаем описание (result[0]) если оно есть, иначе None
             return result[0] if result else None
@@ -260,7 +260,7 @@ def get_user_rate(user_id: int) -> int:
     cursor = conn.cursor()
     try:
     
-        cursor.execute('SELECT Reputation FROM users WHERE user_id = ?', (user_id,))
+        cursor.execute('SELECT reputation FROM users WHERE user_id = ?', (user_id,))
         result = cursor.fetchone()
 
         return result[0] if result else None
@@ -275,7 +275,7 @@ def update_user_rate(user_id: int, rate: int):
     cursor = conn.cursor()
     try:
         cursor.execute('''
-        UPDATE users SET rate = ? WHERE user_id = ?
+        UPDATE users SET reputation = ? WHERE user_id = ?
     ''', (rate, user_id))
         conn.commit()
     except Exception as e:
@@ -283,8 +283,19 @@ def update_user_rate(user_id: int, rate: int):
     finally:
         conn.close()
 
+def unrate_user(user_id: int, rate: int):
+    conn = create_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+        UPDATE users SET reputation = ? WHERE user_id = ?
+    ''', (rate, user_id))
+        conn.commit()
+    except Exception as e:
+        print(e)
+    finally:
+        conn.close()
 
-# Добавьте эти функции в ваш файл database.py
 
 def increment_user_activity(user_id: int):
     """Увеличивает счётчик активности пользователя на 1."""
@@ -327,25 +338,46 @@ def get_chat_leaderboard(limit: int = 10):
             conn.close()
     return []
 
+def get_rate_status(user_id: int) -> str:
+    rate = get_user_rate(user_id)
+    if rate >= 5001:
+        return "S"
+    elif 3501 <= rate <= 5000:
+        return "A"
+    elif 1001 <= rate <= 3500:
+        return "B"
+    elif 51 <= rate <= 1000:
+        return "C"
+    elif -499 <= rate <= 50:
+        return "D"
+    elif rate <= -500:
+        return "F"
+    else:
+        return "N/A"  # на случай, если rate None или что-то не так
+
 # Регистрация самой анкеты, берет информацию из БД(будет использоваться и для профиля частично)
-def get_profile_text(user_id: int) -> str:
+async def get_profile_text(user_id: int) -> str:
     """
     Получает данные из БД и возвращает готовый текст для анкеты.
     Эту функцию можно будет использовать в любом роутере.
     """
     profile_data = get_user_profile(user_id)
+    rank = get_rate_status(user_id)
     
     if profile_data:
-        # Если в поле описания ничего нет (None), заменяем на "Не указано"
+        # Безопасное получение данных с значениями по умолчанию
+        nickname = profile_data.get("nickname", "Не указано")
+        reputation = profile_data.get("reputation", 0)
+        activity = profile_data.get("activity", "Не указано")
         description = profile_data.get("description") or "Не указано"
 
         # Собираем красивое сообщение
         text = (
             f"👤 **Досье гражданина**\n\n"
-            f"🗃️ **Учётное имя:** `{profile_data['nickname']}`\n"
+            f"🗃️ **Учётное имя:** `{nickname}`\n"
             f"🆔 **Публичный цифровой идентификатор:** `{user_id}`\n\n"
-            f"🍚 **Социальный рейтинг:** {profile_data['reputation']}\n"
-            f"☀️ **Активность:** {profile_data['activity']}\n\n"
+            f"🍚 **Социальный рейтинг:** {reputation} ({rank})\n"
+            f"☀️ **Активность:** {activity}\n\n"
             f"📄 **Описание:**\n_{description}_"
         )
         return text

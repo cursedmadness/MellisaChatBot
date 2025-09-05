@@ -4,9 +4,10 @@ from aiogram.types import Message
 from aiogram.exceptions import TelegramBadRequest
 
 from database import (
-    is_admin,add_admin, 
+    is_admin, add_admin, 
     remove_admin, get_user_rate,
-    get_user_rate, update_user_rate
+    get_user_rate, update_user_rate,
+    unrate_user
 )
 
 ADMIN_IDS = [1534963580, 1103985703, 5806584445] # - ИД администраторов, у кого есть доступ к командам. Нужно будет настроить через бд.
@@ -207,6 +208,8 @@ async def add_rate(message: Message):
         
         if text.lower().startswith("+рейтинг"):
             args = text[8:].strip()
+        elif text.lower().startswith("+рейт"):
+            args = text[5:].strip()
             
             if not args:
                 await message.reply("Вы не указали количество выдаваемого рейтинга!")
@@ -247,7 +250,7 @@ async def remove_rate(message: Message):
         
         if text.lower().startswith("-рейтинг"):
             args = text[8:].strip()
-            
+
             if not args:
                 await message.reply("Вы не указали количество снимаемого рейтинга!")
                 return
@@ -279,3 +282,83 @@ async def remove_rate(message: Message):
     
     except Exception as e:
         await message.answer(f'Ошибка: {e}')
+
+@admin_router.message(F.text.lower().startswith('анрейт'))
+async def unrate(message: Message):
+    try:
+        text = message.text.strip().lower()
+        
+        args = text[6:].strip() if len(text) > 6 else ""
+        
+        if message.reply_to_message:
+            user_id = message.reply_to_message.from_user.id
+            username = message.reply_to_message.from_user.username
+            rate = 0
+            unrate_user(user_id, rate)
+            
+            await message.reply(
+                f"✅ Партия обнулила рейтинг пользователя\n"
+                f"👤 ID: {user_id}\n"
+                f"📛 Username: @{username if username else 'нет'}"
+            )
+            
+        elif args:
+            # Случай 2: Команда с аргументом (@username)
+            if args.startswith('@'):
+                username = args[1:].strip()
+                user_id = get_user_id_by_username(username)
+                
+                if user_id:
+                    rate = 0
+                    unrate_user(user_id, rate)
+                    await message.reply(
+                        f"✅ Партия обнулила рейтинг пользователя\n"
+                        f"👤 ID: {user_id}\n"
+                        f"📛 Username: @{username}"
+                    )
+                else:
+                    id = args[1:].strip()
+                    if id:
+                        rate = 0 
+                        unrate_user(user_id, rate)
+                        await message.reply(
+                            f"✅ Партия обнулила рейтинг пользователя\n"
+                            f"👤 ID: {id}\n")
+                    
+                # await message.reply("❌ Пользователь с таким username не найден в базе")
+            else:
+        
+                try:
+                    user_id = int(args)
+                    rate = 0
+                    unrate_user(user_id, rate)
+                    await message.reply(f"✅ Партия обнулила рейтинг пользователя с ID: {user_id}")
+                except ValueError:
+                    await message.reply("❌ Неверный формат. Используйте:\n• /анрейт в ответ на сообщение\n• /анрейт @username\n• /анрейт 123456")
+        
+        else:
+            user_id = message.from_user.id
+            username = message.from_user.username
+            rate = 0
+            unrate_user(user_id, rate)
+            
+            await message.reply(
+                f"✅ Партия обнулила ваш рейтинг\n"
+                f"👤 ID: {user_id}\n"
+                f"📛 Username: @{username if username else 'нет'}"
+            )
+            
+    except Exception as e:
+        await message.reply(f"❌ Ошибка: {str(e)}")
+
+
+# Вспомогательная функция для поиска user_id по username
+def get_user_id_by_username(username: str) -> int:
+    # conn = sqlite3.connect('your_database.db')
+    # cursor = conn.cursor()
+    # cursor.execute('SELECT user_id FROM users WHERE username = ?', (username,))
+    # result = cursor.fetchone()
+    # conn.close()
+    # return result[0] if result else None
+    
+    return None

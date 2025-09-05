@@ -3,9 +3,11 @@ from aiogram.filters.command import Command
 from aiogram.types import Message
 import datetime
 from database import (
-    add_user, get_user_nickname, set_user_nickname,
-    set_user_description, get_profile_text, get_user_description,
-    get_user_rate, get_all_admins
+    add_user, get_user_nickname, 
+    set_user_nickname, set_user_description, 
+    get_user_description, get_user_rate, 
+    get_all_admins, #get_user_profile,
+    get_profile_text, get_rate_status
 )
 
 user_router = Router() # подключение роутеров
@@ -83,6 +85,7 @@ async def profile_handler(message: Message):
     Отправляет пользователю его анкету.
     """
     user_id = message.from_user.id
+    rank = get_rate_status(user_id)
     # Просто вызываем нашу универсальную функцию для получения текста
     profile_text = await get_profile_text(user_id)
     
@@ -147,7 +150,7 @@ async def show_my_description(message: Message):
 
 # Роутер выводит рейтинг пользователя
 @user_router.message(Command('my_rate'))
-@user_router.message(F.text.lower().in_(['мой рейтинг']))
+@user_router.message(F.text.lower().in_(['мой рейтинг', 'рейтинг']))
 async def my_rate(message: Message):
     user_id = message.from_user.id
     rate = get_user_rate(user_id)
@@ -171,7 +174,7 @@ async def my_rate(message: Message):
         rank = "F"
         await message.reply(f"☠️ Ваш социальный рейтинг: {rate} ({rank})")       
 
-Роутер-пинг. банально.
+#Роутер-пинг. банально.
 @user_router.message(Command('ping'))
 @user_router.message(F.text.lower().in_(['пинг','социальный пинг-понг']))
 async def ping_bot(message: Message): # type: ignore

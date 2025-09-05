@@ -12,7 +12,8 @@ import os
 load_dotenv()
 token=os.getenv('TOKEN')
 
-bot=Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True)) # Подключение бота(с оформлением смс)
+bot=Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True)) #type: ignore
+# Подключение бота(с оформлением смс)
 dp=Dispatcher()
 
 dp.include_router(main_router) # Подключение всех роутеров
