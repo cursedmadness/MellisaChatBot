@@ -21,7 +21,7 @@ async def start_handler(message: Message):
     if nickname:
         await message.answer(f"{nickname}, мы Вас узнали! 👋")
     else:
-        add_user(user_id, first_name)
+        add_user(user_id, first_name, message.from_user.username)
         await message.answer(f" 🌸 Добро пожаловать, {first_name}. Ваш профиль загружен в систему. Партия гордится Вами!\n"
                             f"Чтобы узнать больше о нас, можете перейти по этим ссылкам:\n"
                             f"*ссылки*")

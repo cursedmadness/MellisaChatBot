@@ -21,10 +21,11 @@ def create_table():
         try:
             cursor = conn.cursor()
             cursor.execute('''
-                 CREATE TABLE IF NOT EXISTS users (
-                     user_id INTEGER PRIMARY KEY,
-                     nickname TEXT
-                 )
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    nickname TEXT,
+                    username TEXT
+                )
              ''')
             cursor.execute('''CREATE TABLE IF NOT EXISTS waifu_cat (
                 cats_id INTEGER PRIMARY KEY,
@@ -70,7 +71,8 @@ def add_new_columns():
             columns_users = {
                 "description": "TEXT(25)",
                 "reputation": "INTEGER DEFAULT 0",
-                "user_activity": "INTEGER DEFAULT 0"
+                "user_activity": "INTEGER DEFAULT 0",
+                "username": "TEXT"
             }
             
             for column_name, column_def in columns_users.items():
@@ -306,15 +308,25 @@ def update_waifu_age(user_id: int, new_age: int, last_update_iso: str) -> bool:
             
 # --- ОСТАЛЬНЫЕ ВАШИ ФУНКЦИИ (без изменений) ---
 
-def add_user(user_id: int, nickname: str):
-    """Добавляет пользователя в БД с указанным ником (по умолчанию first_name)."""
+def add_user(user_id: int, nickname: str, username: str | None = None):
+    """
+    Добавляет пользователя в БД с указанным ником и username.
+    При повторном добавлении обновляет username.
+    """
     conn = create_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            cursor.execute("INSERT OR IGNORE INTO users (user_id, nickname) VALUES (?, ?)", (user_id, nickname))
+            cursor.execute(
+                """
+                INSERT INTO users (user_id, nickname, username)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    username = excluded.username
+                """,
+                (user_id, nickname, username),
+            )
             conn.commit()
-            # print(f"Пользователь {user_id} добавлен с ником {nickname}") # Можно убрать, чтобы не спамить
         except Error as e:
             print(e)
         finally:    
