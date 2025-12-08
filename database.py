@@ -1,5 +1,6 @@
 import sqlite3
 from sqlite3 import Error
+from datetime import datetime
 
 DB_NAME = "users.db"  # Имя файла БД
 
@@ -14,7 +15,7 @@ def create_connection():
      return conn
 
 def create_table():
-     """Создаёт таблицу users и admins, если её нет."""
+     """Создаёт таблицу users и admins и waifu_cats, если её нет."""
      conn = create_connection()
      if conn:
         try:
@@ -25,6 +26,21 @@ def create_table():
                      nickname TEXT
                  )
              ''')
+            cursor.execute('''CREATE TABLE IF NOT EXISTS waifu_cat (
+                cats_id INTEGER PRIMARY KEY,
+                user_id INTEGER UNIQUE NOT NULL,
+                cat_name TEXT,
+                category_cats TEXT CHECK(category_cats IN ('loli', 'students', 'MILF')),
+                date_cat TEXT,
+                satiety INTEGER DEFAULT 100,
+                miska_risa INTEGER DEFAULT 0,
+                mood TEXT,
+                image_cats TEXT,
+                age_days INTEGER DEFAULT 1,
+                last_age_update TEXT,
+                last_satiety_update TEXT
+            )''')
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS admins (
                     user_id INTEGER PRIMARY KEY,
@@ -32,7 +48,7 @@ def create_table():
                 )
             ''')
             conn.commit()
-            print("Проверка/создание таблицы 'users and admins' выполнено.")
+            print("Проверка/создание таблицы 'users, admins, waifu_cats' выполнено.")
         except Error as e:
             print(e)
         finally:
@@ -43,6 +59,7 @@ def add_new_columns():
     """
     Добавляет новые столбцы (Description, Reputation, User_activity)
     в таблицу users, если они еще не существуют.
+    А также дополнительные поля для waifu_cat из требований роутера.
     """
     conn = create_connection()
     if conn:
@@ -50,13 +67,13 @@ def add_new_columns():
             cursor = conn.cursor()
             
             # Словарь: имя_столбца -> тип_данных_и_ограничения
-            columns = {
+            columns_users = {
                 "description": "TEXT(25)",
                 "reputation": "INTEGER DEFAULT 0",
                 "user_activity": "INTEGER DEFAULT 0"
             }
             
-            for column_name, column_def in columns.items():
+            for column_name, column_def in columns_users.items():
                 try:
                     # Пытаемся добавить каждый столбец
                     cursor.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_def}")
@@ -70,11 +87,222 @@ def add_new_columns():
                         # Сообщаем о других, неожиданных ошибках
                         raise e
 
+            # Дополнительные столбцы для таблицы waifu_cat
+            columns_waifu = {
+                "cat_name": "TEXT",
+                "date_cat": "TEXT",
+                "satiety": "INTEGER DEFAULT 100",
+                "miska_risa": "INTEGER DEFAULT 0",
+                "mood": "TEXT",
+                "age_days": "INTEGER DEFAULT 1",
+                "last_age_update": "TEXT",
+                "last_satiety_update": "TEXT",
+            }
+
+            for column_name, column_def in columns_waifu.items():
+                try:
+                    cursor.execute(f"ALTER TABLE waifu_cat ADD COLUMN {column_name} {column_def}")
+                    print(f"Столбец '{column_name}' успешно добавлен в waifu_cat.")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" in str(e):
+                        pass
+                    else:
+                        raise e
+
             conn.commit()
         except Error as e:
             print(f"Произошла ошибка при добавлении столбцов: {e}")
         finally:
             conn.close()
+
+
+# --- Функции для работы с waifu_cat ---
+
+def _waifu_row_to_dict(row):
+    if not row:
+        return None
+    # Поддержка старых схем: если нет новых колонок, подставляем значения по умолчанию
+    row_len = len(row)
+    def safe(idx, default=None):
+        return row[idx] if row_len > idx else default
+
+    return {
+        "cats_id": safe(0),
+        "user_id": safe(1),
+        "cat_name": safe(2),
+        "category_cats": safe(3),
+        "date_cat": safe(4),
+        "satiety": safe(5, 100),
+        "miska_risa": safe(6, 0),
+        "mood": safe(7, "отличное"),
+        "image_cats": safe(8),
+        "age_days": safe(9, 1),
+        "last_age_update": safe(10),
+        "last_satiety_update": safe(11),
+    }
+
+
+def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category: str = "students", mood: str = "отличное"):
+    """
+    Создаёт запись кошко-жены для пользователя, если её ещё нет.
+    Поле date_cat сохраняем в ISO-формате.
+    """
+    if category not in ("loli", "students", "MILF"):
+        category = "students"
+
+    conn = create_connection()
+    if not conn:
+        return False
+
+    try:
+        cursor = conn.cursor()
+        now_iso = datetime.utcnow().isoformat()
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO waifu_cat (user_id, cat_name, category_cats, date_cat, age_days, last_age_update, mood, satiety, miska_risa, last_satiety_update)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, cat_name, category, now_iso, 1, now_iso, mood, 100, 5, now_iso),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Error as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
+
+def get_waifu_by_user(user_id: int):
+    """Возвращает словарь с данными кошко-жены пользователя или None."""
+    conn = create_connection()
+    if not conn:
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT cats_id, user_id, cat_name, category_cats, date_cat,
+                   satiety, miska_risa, mood, image_cats, age_days, last_age_update
+            FROM waifu_cat WHERE user_id = ?
+            """,
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        return _waifu_row_to_dict(row)
+    except Error as e:
+        print(e)
+        return None
+    finally:
+        conn.close()
+
+
+def update_cat_name(user_id: int, new_name: str) -> bool:
+    """Обновляет кличку кошко-жены пользователя. Возвращает True, если обновлено."""
+    conn = create_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE waifu_cat SET cat_name = ? WHERE user_id = ?",
+            (new_name, user_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Error as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
+
+def update_cat_image(user_id: int, image_path: str) -> bool:
+    """Сохраняет путь к изображению кошко-жены."""
+    conn = create_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE waifu_cat SET image_cats = ? WHERE user_id = ?",
+            (image_path, user_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Error as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
+
+def update_cat_state(user_id: int, *, satiety: int | None = None, miska_risa: int | None = None,
+                    mood: str | None = None, last_satiety_update: str | None = None) -> bool:
+    """
+    Универсальное обновление динамических полей кошко-жены.
+    Обновляет только переданные параметры.
+    """
+    conn = create_connection()
+    if not conn:
+        return False
+
+    fields = []
+    values = []
+    if satiety is not None:
+        fields.append("satiety = ?")
+        values.append(satiety)
+    if miska_risa is not None:
+        fields.append("miska_risa = ?")
+        values.append(miska_risa)
+    if mood is not None:
+        fields.append("mood = ?")
+        values.append(mood)
+    if last_satiety_update is not None:
+        fields.append("last_satiety_update = ?")
+        values.append(last_satiety_update)
+
+    if not fields:
+        return False
+
+    values.append(user_id)
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE waifu_cat SET {', '.join(fields)} WHERE user_id = ?",
+            tuple(values),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Error as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
+
+def update_waifu_age(user_id: int, new_age: int, last_update_iso: str) -> bool:
+    """Обновляет возраст и метку обновления."""
+    conn = create_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE waifu_cat SET age_days = ?, last_age_update = ?
+            WHERE user_id = ?
+            """,
+            (new_age, last_update_iso, user_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Error as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
             
 # --- ОСТАЛЬНЫЕ ВАШИ ФУНКЦИИ (без изменений) ---
 

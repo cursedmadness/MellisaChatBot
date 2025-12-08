@@ -34,7 +34,7 @@ async def show_stats_handler(message: Message):
     await message.answer(response_text, parse_mode="Markdown")
 
 # Роутер собирающий статистику
-@activity_routers.message(F.text)
+@activity_routers.message(F.text & ~F.text.startswith("/"))
 async def count_messages(message: Message):
     # 1. Проверяем, находится ли чат в нашем списке
     if message.chat.id not in STATS_ENABLED_CHATS:
