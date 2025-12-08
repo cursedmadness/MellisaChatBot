@@ -2,12 +2,16 @@ from aiogram import Router, F
 from aiogram.filters.command import Command
 from aiogram.types import Message
 from aiogram.exceptions import TelegramBadRequest
+from aiogram import Bot
 
 from database import (
-    is_admin, add_admin, 
-    remove_admin, get_user_rate,
-    get_user_rate, update_user_rate,
-    unrate_user
+    is_admin,
+    add_admin,
+    remove_admin,
+    get_user_rate,
+    update_user_rate,
+    unrate_user,
+    add_user,
 )
 
 ADMIN_IDS = [1534963580, 1103985703, 5806584445] # - ИД администраторов, у кого есть доступ к командам. Нужно будет настроить через бд.
@@ -17,10 +21,18 @@ admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
 # Позволяет использовать команды ТОЛЬКО администраторам из бд.
 # (Сделать разницу между простыми администраторами(префикс) и администрации чата)
 
+
+def _ensure_user_exists(user_id: int, first_name: str | None = None) -> None:
+    """
+    Гарантирует наличие пользователя в таблице users,
+    чтобы обновление рейтинга не пропускало запись.
+    """
+    add_user(user_id, first_name or "пользователь")
+
 @admin_router.message(Command('ban'))
 @admin_router.message(F.text.lower().startswith('бан')) 
 # Новый для меня модуль .startswith - улавливает начало команды. Нужен для настройки других аргументов. 
-async def ban_user(message: Message, bot: 'Bot'): # type: ignore
+async def ban_user(message: Message, bot: Bot): # type: ignore
         banned_user = None
         # 1. Проверяем, есть ли ответ на сообщение
         if message.reply_to_message:
@@ -37,10 +49,10 @@ async def ban_user(message: Message, bot: 'Bot'): # type: ignore
                 username = username[1:]  # Убираем @
 
                 try:
-                    # Пытаемся найти пользователя в чате по username
-                    chat_members = await bot.get_chat_member(chat_id=message.chat.id, user_id=username)
-                    banned_user = chat_members.user
-                except TelegramBadRequest:
+                    chat_member = await bot.get_chat_member(chat_id=message.chat.id, user_id=username)
+                    banned_user = chat_member.user
+                except TelegramBadRequest as e:
+                    print(e)
                     await message.answer(f"Пользователь @{username} не найден в этом чате.")
                     return
             else:
@@ -67,9 +79,9 @@ async def ban_user(message: Message, bot: 'Bot'): # type: ignore
         # Отправляем сообщение с HTML-разметкой
         await message.answer(
             f'🌲Смотритель <a href="tg://user?id={message.from_user.id}">{message.from_user.first_name}</a> '
-            f'заблокировал гражданина <a href="tg://user?id={banned_user.id}">{banned_user.first_name}</a>',
+            f'заблокировал гражданина <a href="tg://user?id={banned_user.id}">{banned_user.first_name}</a>\n\n'
             f'Воля партии – исправительное перевоспитание.'
-            )
+        )
 
 # Роутер на добавление админа
 @admin_router.message(F.text.lower().startswith('+админ'))
@@ -222,15 +234,16 @@ async def add_rate(message: Message):
                 
                 if message.reply_to_message:
                     user_id = message.reply_to_message.from_user.id
-                    current_rate = get_user_rate(user_id)
-                    new_rate = current_rate + rate_to_add
+                    first_name = message.reply_to_message.from_user.first_name
+                    _ensure_user_exists(user_id, first_name)
+                    new_rate = get_user_rate(user_id) + rate_to_add
                     update_user_rate(user_id, new_rate)
                     
                     await message.reply(f"Пользователю выдано {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
                 else:
                     user_id = message.from_user.id
-                    current_rate = get_user_rate(user_id)
-                    new_rate = current_rate + rate_to_add
+                    _ensure_user_exists(user_id, message.from_user.first_name)
+                    new_rate = get_user_rate(user_id) + rate_to_add
                     update_user_rate(user_id, new_rate)
                     
                     await message.reply(f"Вы выдали себе {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
@@ -262,15 +275,16 @@ async def remove_rate(message: Message):
                 
                 if message.reply_to_message:
                     user_id = message.reply_to_message.from_user.id
-                    current_rate = get_user_rate(user_id)
-                    new_rate = current_rate - rate_to_remove  # Не даем уйти в минус
+                    first_name = message.reply_to_message.from_user.first_name
+                    _ensure_user_exists(user_id, first_name)
+                    new_rate = get_user_rate(user_id) - rate_to_remove  # Не даем уйти в минус
                     update_user_rate(user_id, new_rate)
                     
                     await message.reply(f"У пользователя снято {rate_to_remove} рейтинга. Новый рейтинг: {new_rate}")
                 else:
                     user_id = message.from_user.id
-                    current_rate = get_user_rate(user_id)
-                    new_rate = current_rate - rate_to_remove
+                    _ensure_user_exists(user_id, message.from_user.first_name)
+                    new_rate = get_user_rate(user_id) - rate_to_remove
                     update_user_rate(user_id, new_rate)
                     
                     await message.reply(f"Вы сняли себе {rate_to_remove} рейтинга. Новый рейтинг: {new_rate}")
@@ -307,29 +321,21 @@ async def unrate(message: Message):
                 user_id = get_user_id_by_username(username)
                 
                 if user_id:
-                    rate = 0
-                    unrate_user(user_id, rate)
+                    _ensure_user_exists(user_id, username)
+                    unrate_user(user_id, 0)
                     await message.reply(
                         f"✅ Партия обнулила рейтинг пользователя\n"
                         f"👤 ID: {user_id}\n"
                         f"📛 Username: @{username}"
                     )
                 else:
-                    id = args[1:].strip()
-                    if id:
-                        rate = 0 
-                        unrate_user(user_id, rate)
-                        await message.reply(
-                            f"✅ Партия обнулила рейтинг пользователя\n"
-                            f"👤 ID: {id}\n")
-                    
-                # await message.reply("❌ Пользователь с таким username не найден в базе")
+                    await message.reply("❌ Пользователь с таким username не найден в базе")
             else:
         
                 try:
                     user_id = int(args)
-                    rate = 0
-                    unrate_user(user_id, rate)
+                    _ensure_user_exists(user_id)
+                    unrate_user(user_id, 0)
                     await message.reply(f"✅ Партия обнулила рейтинг пользователя с ID: {user_id}")
                 except ValueError:
                     await message.reply("❌ Неверный формат. Используйте:\n• /анрейт в ответ на сообщение\n• /анрейт @username\n• /анрейт 123456")
@@ -337,8 +343,8 @@ async def unrate(message: Message):
         else:
             user_id = message.from_user.id
             username = message.from_user.username
-            rate = 0
-            unrate_user(user_id, rate)
+            _ensure_user_exists(user_id, message.from_user.first_name)
+            unrate_user(user_id, 0)
             
             await message.reply(
                 f"✅ Партия обнулила ваш рейтинг\n"

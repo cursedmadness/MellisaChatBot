@@ -6,8 +6,7 @@ from database import (
     add_user, get_user_nickname, 
     set_user_nickname, set_user_description, 
     get_user_description, get_user_rate, 
-    get_all_admins, #get_user_profile,
-    get_profile_text, get_rate_status
+    get_all_admins, get_profile_text, get_rate_status
 )
 
 user_router = Router() # подключение роутеров
@@ -56,7 +55,6 @@ async def set_nickname_handler(message: Message):
 @user_router.message(Command('set_description'))
 @user_router.message(F.text.lower().startswith('сменить описание'))
 async def set_description_handler(message: Message):
-    # ... (код без изменений)
     user_id = message.from_user.id
     parts = message.text.strip()
     
@@ -90,7 +88,6 @@ async def profile_handler(message: Message):
     profile_text = await get_profile_text(user_id)
     
     await message.answer(profile_text, parse_mode="Markdown")
-    #await message.answer(f'Изменить данные своей анкеты Вы можете в личных сообщениях бота.')
 
 # Роутер удаляет ник
 @user_router.message(Command('delete_nickname'))

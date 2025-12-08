@@ -183,7 +183,7 @@ def get_waifu_by_user(user_id: int):
         cursor.execute(
             """
             SELECT cats_id, user_id, cat_name, category_cats, date_cat,
-                   satiety, miska_risa, mood, image_cats, age_days, last_age_update
+                   satiety, miska_risa, mood, image_cats, age_days, last_age_update, last_satiety_update
             FROM waifu_cat WHERE user_id = ?
             """,
             (user_id,),
