@@ -11,7 +11,7 @@ STATS_ENABLED_CHATS = {-1002059485061, -1003079876973, -1002709445496} #ид ч�
 
 # Роутер выводит статистику
 @activity_routers.message(Command('activity'))
-@activity_routers.message(F.text.lower().in_(['статистика','стата']))
+@activity_routers.message(F.text.lower().in_(['статистика','стата','сводка','активность','актив']))
 async def show_stats_handler(message: Message):
     # 1. Проверяем, можно ли использовать команду в этом чате
     if message.chat.id not in STATS_ENABLED_CHATS:
@@ -26,7 +26,7 @@ async def show_stats_handler(message: Message):
         return
 
     # 3. Формируем красивый ответ
-    response_text = "🏆 **Статистика активности в чате:**\n\n"
+    response_text = "✍️ Сводка народной активности*\n\n"
     
     for i, (nickname, activity) in enumerate(leaderboard, 1):
         response_text += f"{i}. {nickname} - {activity} сообщений\n"
