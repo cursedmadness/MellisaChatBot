@@ -2,14 +2,47 @@ from aiogram import Router, F
 from aiogram.filters.command import Command
 from aiogram.types import Message
 import datetime
+import re
 from database import (
-    add_user, get_user_nickname, 
-    set_user_nickname, set_user_description, 
-    get_user_description, get_user_rate, 
-    get_all_admins, get_profile_text, get_rate_status
+    add_user, get_user_nickname,
+    set_user_nickname, set_user_description,
+    get_user_description, get_user_rate,
+    get_all_admins, get_profile_text, get_rate_status,
+    get_user_by_username
 )
 
 user_router = Router() # подключение роутеров
+
+
+def _extract_user_from_text(text: str) -> tuple[int | None, str | None]:
+    """
+    Извлекает user_id из текста команды.
+    Поддерживает: @username, @user_id, https://t.me/username
+    Возвращает (user_id, username) или (None, None) если не найдено
+    """
+    text = text.strip()
+
+    # Паттерн для @username или @user_id
+    mention_pattern = r'@([a-zA-Z0-9_]+)'
+    match = re.search(mention_pattern, text)
+    if match:
+        username_or_id = match.group(1)
+        # Проверяем, является ли это числом (user_id)
+        try:
+            user_id = int(username_or_id)
+            return user_id, None
+        except ValueError:
+            # Это username
+            return None, username_or_id
+
+    # Паттерн для ссылки https://t.me/username
+    link_pattern = r'https?://t\.me/([a-zA-Z0-9_]+)'
+    match = re.search(link_pattern, text)
+    if match:
+        username = match.group(1)
+        return None, username
+
+    return None, None
 
 # Стартовый хендлер для запуска регистрации анкеты
 @user_router.message(Command('start'))
@@ -205,3 +238,48 @@ async def admin_list_command(message: Message):
         admin_list_text += f"- <a href='tg://user?id={user_id}'>{first_name}</a> (ID: {user_id})\n"
 
     await message.answer(admin_list_text, parse_mode='HTML')
+
+
+@user_router.message(F.text.lower().func(lambda t: t.startswith("ид ") or t == "мой ид"))
+async def show_user_id(message: Message):
+    """
+    Показывает ID пользователя.
+    Команды: "мой ид", "ид @username", "ид @user_id", "ид https://t.me/username"
+    """
+    text = message.text.strip().lower()
+
+    target_id = None
+    target_display = None
+
+    if text == "мой ид":
+        # Показываем свой ID
+        target_id = message.from_user.id
+        target_display = message.from_user.full_name or "пользователь"
+    else:
+        # Извлекаем упоминание после "ид "
+        mention_part = text[3:].strip()  # Убираем "ид "
+
+        extracted_user_id, extracted_username = _extract_user_from_text(mention_part)
+
+        if extracted_user_id:
+            # Найден user_id напрямую
+            target_id = extracted_user_id
+            target_display = f"user_{target_id}"
+        elif extracted_username:
+            # Найден username, пытаемся разрешить
+            resolved_id = get_user_by_username(extracted_username)
+            if resolved_id:
+                target_id = resolved_id
+                target_display = f"@{extracted_username}"
+            else:
+                await message.reply(f"Пользователь @{extracted_username} не найден в базе данных.")
+                return
+        else:
+            await message.reply("Укажите пользователя после команды. Пример: ид @username")
+            return
+
+    # Формируем ответ
+    user_link = f"<a href='tg://user?id={target_id}'>{target_display}</a>"
+    response = f"Ид пользователя {user_link} - <code>{target_id}</code>"
+
+    await message.reply(response, parse_mode="HTML")
