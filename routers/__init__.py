@@ -10,7 +10,7 @@ from aiogram import Router
 main_router = Router() # подключение роутеров
 
 main_router.include_router(admin_router) #Роутеры админ команд
-main_router.include_router(user_router) #Роутеры пользовательских команд
+main_router.include_router(user_router) #Роутеры команд граждан
 main_router.include_router(waifu_cat_router) #Роутеры waifu/cat
 main_router.include_router(hebao_router) #Роутеры хэбао (инвентарь)
 main_router.include_router(rules_router) #Роутеры правил чата

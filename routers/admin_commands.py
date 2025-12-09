@@ -16,96 +16,42 @@ from database import (
     delete_user_completely,
     get_user_by_username,
     reset_all_rice_to_one,
+    get_rate_display,
+    reset_all_ratings_to_default,
 )
+from routers.moderation_commands import moderation_app
 
-ADMIN_IDS = [1534963580, 1103985703, 5806584445] # - ИД администраторов, у кого есть доступ к командам. Нужно будет настроить через бд.
+ADMIN_IDS = [1534963580, 1103985703, 5806584445] # - ИД главаистраторов, у кого есть доступ к командам. Нужно будет настроить через бд.
 
 admin_router = Router() # подключение роутеров
 admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
-# Позволяет использовать команды ТОЛЬКО администраторам из бд.
-# (Сделать разницу между простыми администраторами(префикс) и администрации чата)
+# Позволяет использовать команды ТОЛЬКО главаистраторам из бд.
+# (Сделать разницу между простыми главаистраторами(префикс) и главаистрации чата)
 
 logger = logging.getLogger(__name__)
 
 
 def _ensure_user_exists(user_id: int, first_name: str | None = None) -> None:
     """
-    Гарантирует наличие пользователя в таблице users,
+    Гарантирует наличие Гражданина в таблице users,
     чтобы обновление рейтинга не пропускало запись.
     """
-    add_user(user_id, first_name or "пользователь")
+    add_user(user_id, first_name or "Гражданин")
 
-@admin_router.message(Command('ban'))
-@admin_router.message(F.text.lower().startswith('бан')) 
-# Новый для меня модуль .startswith - улавливает начало команды. Нужен для настройки других аргументов. 
-async def ban_user(message: Message, bot: Bot): # type: ignore
-        banned_user = None
-        # 1. Проверяем, есть ли ответ на сообщение
-        if message.reply_to_message:
-            banned_user = message.reply_to_message.from_user
-        # 2. Проверяем, есть ли упоминание @username в команде
-        else:
-            args = message.text.split()
-            if len(args) < 2:
-                await message.answer("Укажите пользователя для бана, ответив на его сообщение или указав @username.")
-                return
 
-            username = args[1]
-            if username.startswith('@'):
-                username = username[1:]  # Убираем @
-
-                try:
-                    chat_member = await bot.get_chat_member(chat_id=message.chat.id, user_id=username)
-                    banned_user = chat_member.user
-                except TelegramBadRequest as e:
-                    print(e)
-                    await message.answer(f"Пользователь @{username} не найден в этом чате.")
-                    return
-            else:
-                await message.answer("Пожалуйста, укажите @username или ответьте на сообщение пользователя.")
-                return
-
-        # Проверяем, что banned_user найден
-        if not banned_user:
-            logger.warning(f"Не удалось определить пользователя для бана в чате {message.chat.id}")
-            await message.answer("Не удалось определить пользователя для бана.")
-            return
-
-        # Проверяем, что пользователь не пытается забанить сам себя
-        if banned_user.id == message.from_user.id:
-            logger.warning(f"Пользователь {message.from_user.id} попытался забанить сам себя")
-            await message.answer("❌ Партия не одобряет самовыпил")
-            return
-
-        # Выполняем бан
-        try:
-            await bot.ban_chat_member(chat_id=message.chat.id, user_id=banned_user.id)
-            logger.info(f"Пользователь {banned_user.id} забанен администратором {message.from_user.id} в чате {message.chat.id}")
-        except TelegramBadRequest as e:
-            logger.error(f"Ошибка при бане пользователя {banned_user.id}: {str(e)}")
-            await message.answer(f"Ошибка при бане пользователя: {str(e)}")
-            return
-
-        # Отправляем сообщение с HTML-разметкой
-        await message.answer(
-            f'🌲Смотритель <a href="tg://user?id={message.from_user.id}">{message.from_user.first_name}</a> '
-            f'заблокировал гражданина <a href="tg://user?id={banned_user.id}">{banned_user.first_name}</a>\n\n'
-            f'Воля партии – исправительное перевоспитание.'
-        )
-
-# Роутер на добавление админа
-@admin_router.message(F.text.lower().startswith('+админ'))
+# Роутер на добавление главаа
+@admin_router.message(F.text.lower().startswith('+глава'))
 async def add_admin_command(message: Message, bot: 'Bot'): # type: ignore
     # Проверяем, что команда вызвана в групповом чате
     if message.chat.type not in ["group", "supergroup"]:
         await message.answer("Эта команда работает только в групповых чатах!")
         return
-    print(f"Команда +админ вызвана пользователем {message.from_user.id} в чате {message.chat.id}")  # Отладка
+    print(f"Команда +глава вызвана Гражданином {message.from_user.id} в чате {message.chat.id}")  # Отладка
 
-    # Проверяем, находится ли пользователь в списке ADMIN_IDS
+    # Проверяем, находится ли Гражданин в списке ADMIN_IDS
     if message.from_user.id not in ADMIN_IDS:
-        print(f"Пользователь {message.from_user.id} не в ADMIN_IDS")  # Отладка
-        await message.answer("У вас нет прав для добавления администраторов.")
+        print(f"Гражданин {message.from_user.id} не в ADMIN_IDS")  # Отладка
+        await message.answer("У вас нет прав для добавления главы.")
         return
 
     new_admin = None
@@ -113,12 +59,12 @@ async def add_admin_command(message: Message, bot: 'Bot'): # type: ignore
     # 1. Проверяем, есть ли ответ на сообщение
     if message.reply_to_message:
         new_admin = message.reply_to_message.from_user
-        print(f"Новый админ (через ответ): {new_admin.id}")  # Отладка
+        print(f"Новый глава (через ответ): {new_admin.id}")  # Отладка
     # 2. Проверяем, есть ли упоминание @username
     else:
         args = message.text.split()
         if len(args) < 2:
-            await message.answer("Укажите пользователя для назначения админом, ответив на его сообщение или указав @username.")
+            await message.answer("Укажите Гражданина для назначения главой, ответив на его сообщение или указав @username.")
             return
 
         username = args[1]
@@ -127,48 +73,48 @@ async def add_admin_command(message: Message, bot: 'Bot'): # type: ignore
             try:
                 chat_member = await bot.get_chat_member(chat_id=message.chat.id, user_id=username)
                 new_admin = chat_member.user
-                print(f"Новый админ (через @username): {new_admin.id}")  # Отладка
+                print(f"Новый глава (через @username): {new_admin.id}")  # Отладка
             except TelegramBadRequest:
-                print(f"Пользователь @{username} не найден")  # Отладка
-                await message.answer(f"Пользователь @{username} не найден в этом чате.")
+                print(f"Гражданин @{username} не найден")  # Отладка
+                await message.answer(f"Гражданин @{username} не найден в этом чате.")
                 return
         else:
-            await message.answer("Пожалуйста, укажите @username или ответьте на сообщение пользователя.")
+            await message.answer("Пожалуйста, укажите @username или ответьте на сообщение Гражданина.")
             return
 
     # Проверяем, что new_admin найден
     if not new_admin:
         print("new_admin не определён")  # Отладка
-        await message.answer("Не удалось определить пользователя для назначения админом.")
+        await message.answer("Не удалось определить Гражданина для назначения главой.")
         return
 
-    # Проверяем, не является ли пользователь уже админом
+    # Проверяем, не является ли Гражданин уже главаом
     if is_admin(new_admin.id):
-        await message.answer(f"Пользователь <a href='tg://user?id={new_admin.id}'>{new_admin.first_name}</a> уже администратор!", parse_mode='HTML')
+        await message.answer(f"Гражданин <a href='tg://user?id={new_admin.id}'>{new_admin.first_name}</a> уже глава!", parse_mode='HTML')
         return
 
-    # Добавляем администратора
+    # Добавляем главаистратора
     add_admin(new_admin.id, new_admin.first_name)
     await message.answer(
-        f"Пользователь <a href='tg://user?id={new_admin.id}'>{new_admin.first_name}</a> назначен администратором!",
+        f"Гражданин <a href='tg://user?id={new_admin.id}'>{new_admin.first_name}</a> назначен глава!",
         parse_mode='HTML'
     )
 
-# Роутер снимающий с должности админа
-@admin_router.message(F.text.lower().startswith('-админ'))
+# Роутер снимающий с должности главаа
+@admin_router.message(F.text.lower().startswith('-глава'))
 async def remove_admin_command(message: Message, bot: 'Bot'): # type: ignore
     # Проверяем, что команда вызвана в групповом чате
     if message.chat.type not in ["group", "supergroup"]:
         await message.answer("Эта команда работает только в групповых чатах!")
-        print(f"Команда -админ вызвана в {message.chat.type}, отклонена")  # Отладка
+        print(f"Команда -глава вызвана в {message.chat.type}, отклонена")  # Отладка
         return
 
-    print(f"Команда -админ вызвана пользователем {message.from_user.id} в чате {message.chat.id}")  # Отладка
+    print(f"Команда -глава вызвана Гражданином {message.from_user.id} в чате {message.chat.id}")  # Отладка
 
-    # Проверяем, находится ли пользователь в списке ADMIN_IDS
+    # Проверяем, находится ли Гражданин в списке ADMIN_IDS
     if message.from_user.id not in ADMIN_IDS:
-        print(f"Пользователь {message.from_user.id} не в ADMIN_IDS")  # Отладка
-        await message.answer("У вас нет прав для удаления администраторов.")
+        print(f"Гражданин {message.from_user.id} не в ADMIN_IDS")  # Отладка
+        await message.answer("У вас нет прав для удаления главы.")
         return
 
     target_user = None
@@ -176,12 +122,12 @@ async def remove_admin_command(message: Message, bot: 'Bot'): # type: ignore
     # 1. Проверяем, есть ли ответ на сообщение
     if message.reply_to_message:
         target_user = message.reply_to_message.from_user
-        print(f"Админ для удаления (через ответ): {target_user.id}")  # Отладка
+        print(f"глава для удаления (через ответ): {target_user.id}")  # Отладка
     # 2. Проверяем, есть ли упоминание @username
     else:
         args = message.text.split()
         if len(args) < 2:
-            await message.answer("Укажите пользователя для удаления из админов, ответив на его сообщение или указав @username.")
+            await message.answer("Укажите Гражданина для удаления из главы, ответив на его сообщение или указав @username.")
             return
 
         username = args[1]
@@ -190,35 +136,35 @@ async def remove_admin_command(message: Message, bot: 'Bot'): # type: ignore
             try:
                 chat_member = await bot.get_chat_member(chat_id=message.chat.id, user_id=username)
                 target_user = chat_member.user
-                print(f"Админ для удаления (через @username): {target_user.id}")  # Отладка
+                print(f"глава для удаления (через @username): {target_user.id}")  # Отладка
             except TelegramBadRequest:
-                print(f"Пользователь @{username} не найден")  # Отладка
-                await message.answer(f"Пользователь @{username} не найден в этом чате.")
+                print(f"Гражданин @{username} не найден")  # Отладка
+                await message.answer(f"Гражданин @{username} не найден в этом чате.")
                 return
         else:
-            await message.answer("Пожалуйста, укажите @username или ответьте на сообщение пользователя.")
+            await message.answer("Пожалуйста, укажите @username или ответьте на сообщение Гражданина.")
             return
 
     # Проверяем, что target_user найден
     if not target_user:
         print("target_user не определён")  # Отладка
-        await message.answer("Не удалось определить пользователя для удаления из админов.")
+        await message.answer("Не удалось определить Гражданина для удаления из глав.")
         return
 
-    # Проверяем, является ли пользователь админом
+    # Проверяем, является ли Гражданин главаом
     if not is_admin(target_user.id):
-        await message.answer(f"Пользователь <a href='tg://user?id={target_user.id}'>{target_user.first_name}</a> не является администратором!", parse_mode='HTML')
+        await message.answer(f"Гражданин <a href='tg://user?id={target_user.id}'>{target_user.first_name}</a> не является главой!", parse_mode='HTML')
         return
 
-    # Проверяем, не пытается ли пользователь удалить сам себя
+    # Проверяем, не пытается ли Гражданин удалить сам себя
     if target_user.id == message.from_user.id:
-        await message.answer("Вы не можете удалить себя из администраторов!")
+        await message.answer("Вы не можете удалить себя из глав!")
         return
 
-    # Удаляем администратораf
+    # Удаляем главаистратораf
     remove_admin(target_user.id)
     await message.answer(
-        f"Пользователь <a href='tg://user?id={target_user.id}'>{target_user.first_name}</a> удалён из администраторов!",
+        f"Гражданин <a href='tg://user?id={target_user.id}'>{target_user.first_name}</a> удалён из глав!",
         parse_mode='HTML'
     )
 
@@ -246,17 +192,21 @@ async def add_rate(message: Message):
                     user_id = message.reply_to_message.from_user.id
                     first_name = message.reply_to_message.from_user.first_name
                     _ensure_user_exists(user_id, first_name)
-                    new_rate = get_user_rate(user_id) + rate_to_add
+                    old_rate = get_user_rate(user_id)
+                    new_rate = old_rate + rate_to_add
                     update_user_rate(user_id, new_rate)
-                    
-                    await message.reply(f"Пользователю выдано {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
+
+                    rate_display = get_rate_display(user_id)
+                    await message.reply(f"Гражданину выдано {rate_to_add} рейтинга.\n{rate_display}")
                 else:
                     user_id = message.from_user.id
                     _ensure_user_exists(user_id, message.from_user.first_name)
-                    new_rate = get_user_rate(user_id) + rate_to_add
+                    old_rate = get_user_rate(user_id)
+                    new_rate = old_rate + rate_to_add
                     update_user_rate(user_id, new_rate)
-                    
-                    await message.reply(f"Вы выдали себе {rate_to_add} рейтинга. Новый рейтинг: {new_rate}")
+
+                    rate_display = get_rate_display(user_id)
+                    await message.reply(f"Вы выдали себе {rate_to_add} рейтинга.\n{rate_display}")
             
             except ValueError:
                 await message.reply("Количество рейтинга должно быть числом!")
@@ -287,17 +237,21 @@ async def remove_rate(message: Message):
                     user_id = message.reply_to_message.from_user.id
                     first_name = message.reply_to_message.from_user.first_name
                     _ensure_user_exists(user_id, first_name)
-                    new_rate = get_user_rate(user_id) - rate_to_remove  # Не даем уйти в минус
+                    old_rate = get_user_rate(user_id)
+                    new_rate = old_rate - rate_to_remove  # Не даем уйти в минус
                     update_user_rate(user_id, new_rate)
-                    
-                    await message.reply(f"У пользователя снято {rate_to_remove} рейтинга. Новый рейтинг: {new_rate}")
+
+                    rate_display = get_rate_display(user_id)
+                    await message.reply(f"У гражданина снято {rate_to_remove} рейтинга.\n{rate_display}")
                 else:
                     user_id = message.from_user.id
                     _ensure_user_exists(user_id, message.from_user.first_name)
-                    new_rate = get_user_rate(user_id) - rate_to_remove
+                    old_rate = get_user_rate(user_id)
+                    new_rate = old_rate - rate_to_remove
                     update_user_rate(user_id, new_rate)
-                    
-                    await message.reply(f"Вы сняли себе {rate_to_remove} рейтинга. Новый рейтинг: {new_rate}")
+
+                    rate_display = get_rate_display(user_id)
+                    await message.reply(f"Вы сняли себе {rate_to_remove} рейтинга.\n{rate_display}")
             
             except ValueError:
                 await message.reply("Количество рейтинга должно быть числом!")
@@ -319,7 +273,7 @@ async def unrate(message: Message):
             unrate_user(user_id, rate)
             
             await message.reply(
-                f"✅ Партия обнулила рейтинг пользователя\n"
+                f"✅ Партия обнулила рейтинг Гражданина\n"
                 f"👤 ID: {user_id}\n"
                 f"📛 Username: @{username if username else 'нет'}"
             )
@@ -334,19 +288,19 @@ async def unrate(message: Message):
                     _ensure_user_exists(user_id, username)
                     unrate_user(user_id, 0)
                     await message.reply(
-                        f"✅ Партия обнулила рейтинг пользователя\n"
+                        f"✅ Партия обнулила рейтинг Гражданина\n"
                         f"👤 ID: {user_id}\n"
                         f"📛 Username: @{username}"
                     )
                 else:
-                    await message.reply("❌ Пользователь с таким username не найден в базе")
+                    await message.reply("❌ Гражданин с таким username не найден в базе")
             else:
         
                 try:
                     user_id = int(args)
                     _ensure_user_exists(user_id)
                     unrate_user(user_id, 0)
-                    await message.reply(f"✅ Партия обнулила рейтинг пользователя с ID: {user_id}")
+                    await message.reply(f"✅ Партия обнулила рейтинг Гражданина с ID: {user_id}")
                 except ValueError:
                     await message.reply("❌ Неверный формат. Используйте:\n• /анрейт в ответ на сообщение\n• /анрейт @username\n• /анрейт 123456")
         
@@ -371,7 +325,7 @@ async def unrate(message: Message):
 @admin_router.message(F.text.lower().startswith("обнулить"))
 async def delete_user_command(message: Message):
     """
-    Команда для администраторов: полностью удаляет пользователя из системы.
+    Команда для главаистраторов: полностью удаляет Гражданина из системы.
     Формат: /delete_user @username или обнулить @username
     """
     if not is_admin(message.from_user.id):
@@ -397,41 +351,104 @@ async def delete_user_command(message: Message):
         return
 
     # Выполняем удаление
-    logger.info(f"Администратор {message.from_user.id} начинает удаление пользователя @{username}")
+    logger.info(f"главаистратор {message.from_user.id} начинает удаление Гражданина @{username}")
     success = delete_user_completely(username)
 
     if success:
-        logger.info(f"Администратор {message.from_user.id} успешно удалил пользователя @{username}")
+        logger.info(f"главаистратор {message.from_user.id} успешно удалил Гражданина @{username}")
         await message.reply(
-            f"✅ Пользователь @{username} полностью удален из системы.\n"
-            f"Удалены все данные: профиль, кошко-жена, хэбао, админские права."
+            f"✅ Гражданин @{username} полностью удален из системы.\n"
+            f"Удалены все данные: профиль, кошко-жена, хэбао, главаские права."
         )
     else:
-        logger.warning(f"Администратор {message.from_user.id} не смог удалить пользователя @{username} - пользователь не найден")
-        await message.reply(f"❌ Пользователь @{username} не найден в базе данных.")
+        logger.warning(f"главаистратор {message.from_user.id} не смог удалить Гражданина @{username} - Гражданин не найден")
+        await message.reply(f"❌ Гражданин @{username} не найден в базе данных.")
 
 
 @admin_router.message(F.text.lower().startswith("сбросить рис"))
 async def reset_rice_command(message: Message):
     """
-    Команда для администраторов: сбрасывает количество риса у всех пользователей до 1 миски.
+    Команда для главаистраторов: сбрасывает количество риса у всех пользователей до 1 миски.
     Формат: сбросить рис
     """
     if not is_admin(message.from_user.id):
         await message.reply("❌ У вас нет прав для выполнения этой команды.")
         return
 
-    logger.info(f"Администратор {message.from_user.id} начинает сброс риса всем пользователям")
+    logger.info(f"главаистратор {message.from_user.id} начинает сброс риса всем Гражданинам")
 
     await message.reply("🔄 Начинаю сброс количества риса до 1 миски у всех пользователей...")
 
     reset_count = reset_all_rice_to_one()
 
-    logger.info(f"Администратор {message.from_user.id} сбросил рис {reset_count} пользователям")
+    logger.info(f"главаистратор {message.from_user.id} сбросил рис {reset_count} Гражданинам")
 
     await message.reply(
         f"✅ Сброс риса завершен!\n\n"
         f"📊 Результаты:\n"
         f"• Обновлено пользователей: {reset_count}\n\n"
-        f"Теперь у каждого пользователя ровно 1 миска риса."
+        f"Теперь у каждого Гражданина ровно 1 миска риса."
     )
+
+
+@admin_router.message(F.text.lower().startswith("сбросить рейтинг"))
+async def reset_rating_command(message: Message):
+    """
+    Команда для администраторов: сбрасывает рейтинг всех граждан до 100.
+    Формат: сбросить рейтинг
+    """
+    if not is_admin(message.from_user.id):
+        await message.reply("❌ У вас нет прав для выполнения этой команды.")
+        return
+
+    logger.info(f"Администратор {message.from_user.id} начинает сброс рейтинга всем гражданам")
+
+    await message.reply("🔄 Начинаю сброс рейтинга до 100 у всех граждан...")
+
+    reset_count = reset_all_ratings_to_default(100)
+
+    logger.info(f"Администратор {message.from_user.id} сбросил рейтинг {reset_count} гражданам")
+
+    await message.reply(
+        f"✅ Сброс рейтинга завершен!\n\n"
+        f"📊 Результаты:\n"
+        f"• Обновлено граждан: {reset_count}\n\n"
+        f"Теперь у каждого гражданина рейтинг равен 100."
+    )
+
+
+@admin_router.message(F.text.lower().startswith("статус модерации"))
+async def moderation_status_command(message: Message):
+    """
+    Команда для администраторов: проверка статуса системы модерации.
+    Формат: статус модерации
+    """
+    if not is_admin(message.from_user.id):
+        await message.reply("❌ У вас нет прав для выполнения этой команды.")
+        return
+
+    status_msg = "📊 Статус системы модерации:\n\n"
+
+    if moderation_app is not None:
+        status_msg += "✅ Pyrogram бот: инициализирован\n"
+        status_msg += "✅ Команды модерации: доступны\n\n"
+        status_msg += "🛠️ Доступные команды:\n"
+        status_msg += "• /бан @username - забанить\n"
+        status_msg += "• /разбан @username - разбанить\n"
+        status_msg += "• /мут @username [мин] - замутить\n"
+        status_msg += "• /размут @username - размутить\n"
+        status_msg += "• /варн @username - выдать предупреждение\n"
+        status_msg += "• /снять_варн @username - снять предупреждение\n"
+        status_msg += "• /наказания @username - просмотреть наказания\n"
+    else:
+        status_msg += "❌ Pyrogram бот: НЕ инициализирован\n"
+        status_msg += "❌ Команды модерации: недоступны\n\n"
+        status_msg += "🔧 Для активации:\n"
+        status_msg += "1. Перейдите на https://my.telegram.org/\n"
+        status_msg += "2. Создайте приложение\n"
+        status_msg += "3. Добавьте в .env файл:\n"
+        status_msg += "   API_ID=ваш_api_id\n"
+        status_msg += "   API_HASH=ваш_api_hash\n"
+        status_msg += "4. Перезапустите бота"
+
+    await message.reply(status_msg)

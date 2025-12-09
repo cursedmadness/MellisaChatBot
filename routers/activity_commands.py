@@ -177,10 +177,10 @@ async def show_stats_handler(message: Message):
 
     # 3. Формируем красивый ответ
     response_text = "✍️ Сводка народной активности*\n\n"
-
+    
     for i, (nickname, activity) in enumerate(leaderboard, 1):
         response_text += f"{i}. {nickname} - {activity} сообщений\n"
-
+        
     await message.answer(response_text, parse_mode="Markdown")
 
 # Роутер собирающий статистику

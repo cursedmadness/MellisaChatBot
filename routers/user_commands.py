@@ -8,7 +8,7 @@ from database import (
     set_user_nickname, set_user_description,
     get_user_description, get_user_rate,
     get_all_admins, get_profile_text, get_rate_status,
-    get_user_by_username
+    get_user_by_username, get_rate_display
 )
 
 user_router = Router() # подключение роутеров
@@ -48,7 +48,7 @@ def _extract_user_from_text(text: str) -> tuple[int | None, str | None]:
 @user_router.message(Command('start'))
 async def start_handler(message: Message):
     user_id = message.from_user.id
-    first_name = message.from_user.first_name or "пользователь"
+    first_name = message.from_user.first_name or "гражданин"
     nickname = get_user_nickname(user_id)
     
     if nickname:
@@ -113,7 +113,7 @@ async def set_description_handler(message: Message):
 @user_router.message(F.text.lower().in_(['анкета','досье']))
 async def profile_handler(message: Message):
     """
-    Отправляет пользователю его анкету.
+    Отправляет гражданину его анкету.
     """
     user_id = message.from_user.id
     rank = get_rate_status(user_id)
@@ -127,11 +127,11 @@ async def profile_handler(message: Message):
 @user_router.message(F.text.lower().in_(['удалить ник','удалить имя']))
 async def reset_nickname_handler(message: Message):
     """
-    Сбрасывает ник пользователя к его имени в Telegram.
+    Сбрасывает ник гражданина к его имени в Telegram.
     """
     user_id = message.from_user.id
     # Получаем first_name, чтобы использовать его как ник по умолчанию
-    first_name = message.from_user.first_name or "пользователь"
+    first_name = message.from_user.first_name or "гражданин"
     
     set_user_nickname(user_id, first_name)
     
@@ -142,7 +142,7 @@ async def reset_nickname_handler(message: Message):
 @user_router.message(F.text.lower().in_(['удалить описание','очистить описание']))
 async def clear_description_handler(message: Message):
     """
-    Очищает описание профиля пользователя.
+    Очищает описание профиля гражданина.
     """
     user_id = message.from_user.id
     
@@ -152,7 +152,7 @@ async def clear_description_handler(message: Message):
     
     await message.answer("🗑️ Ваше описание успешно отправлено в ссылку.")
 
-# Роутер выводит ник пользователя
+# Роутер выводит ник гражданина
 @user_router.message(F.text.lower().in_(['мой ник','ник']))
 async def show_my_nickname(message: Message):
     user_id = message.from_user.id
@@ -165,7 +165,7 @@ async def show_my_nickname(message: Message):
         await message.answer("Я тебя ещё не знаю. Напиши /start для регистрации.")
 
 
-# Роутер выводит описание пользователя
+# Роутер выводит описание гражданина
 @user_router.message(F.text.lower().in_(['моё описание','описание']))
 async def show_my_description(message: Message):
     user_id = message.from_user.id
@@ -175,34 +175,16 @@ async def show_my_description(message: Message):
     if description:
         await message.answer(f"📄 Твоё описание:\n_{description}_", parse_mode="Markdown")
     else:
-        # Эта ветка сработает, если описание None или если пользователь не зарегистрирован
+        # Эта ветка сработает, если описание None или если гражданин не зарегистрирован
         await message.answer("У тебя пока нет описания. Можешь добавить его командой `/set_description`.", parse_mode="Markdown")
 
-# Роутер выводит рейтинг пользователя
+# Роутер выводит рейтинг гражданина
 @user_router.message(Command('my_rate'))
 @user_router.message(F.text.lower().in_(['мой рейтинг', 'рейтинг']))
 async def my_rate(message: Message):
     user_id = message.from_user.id
-    rate = get_user_rate(user_id)
-
-    if rate >= 5001:
-        rank = "S"
-        await message.reply(f"👑 Ваш социальный рейтинг: {rate} ({rank})")
-    elif 3501 <= rate <= 5000:
-        rank = "A"
-        await message.reply(f"🐉 Ваш социальный рейтинг: {rate} ({rank})")
-    elif 1001 <= rate <= 3500:
-        rank = "B"
-        await message.reply(f"☀️ Ваш социальный рейтинг: {rate} ({rank})")
-    elif 51 <= rate <= 1000:
-        rank = "C"
-        await message.reply(f"🍀 Ваш социальный рейтинг: {rate} ({rank})")
-    elif -499 <= rate <= 50:
-        rank = "D"
-        await message.reply(f"🌱 Ваш социальный рейтинг: {rate} ({rank})")
-    elif rate <= -500:
-        rank = "F"
-        await message.reply(f"☠️ Ваш социальный рейтинг: {rate} ({rank})")       
+    rate_display = get_rate_display(user_id)
+    await message.reply(rate_display)       
 
 #Роутер-пинг. банально.
 @user_router.message(Command('ping'))
@@ -243,7 +225,7 @@ async def admin_list_command(message: Message):
 @user_router.message(F.text.lower().func(lambda t: t.startswith("ид ") or t == "мой ид"))
 async def show_user_id(message: Message):
     """
-    Показывает ID пользователя.
+    Показывает ID гражданина.
     Команды: "мой ид", "ид @username", "ид @user_id", "ид https://t.me/username"
     """
     text = message.text.strip().lower()
@@ -275,11 +257,11 @@ async def show_user_id(message: Message):
                 await message.reply(f"Пользователь @{extracted_username} не найден в базе данных.")
                 return
         else:
-            await message.reply("Укажите пользователя после команды. Пример: ид @username")
+            await message.reply("Укажите гражданина после команды. Пример: ид @username")
             return
 
     # Формируем ответ
     user_link = f"<a href='tg://user?id={target_id}'>{target_display}</a>"
-    response = f"Ид пользователя {user_link} - <code>{target_id}</code>"
+    response = f"Ид гражданина {user_link} - <code>{target_id}</code>"
 
     await message.reply(response, parse_mode="HTML")

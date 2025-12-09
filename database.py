@@ -1,6 +1,6 @@
 import sqlite3
 from sqlite3 import Error
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 from config import MAX_RICE_PER_USER
@@ -67,6 +67,10 @@ def create_table():
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_waifu_user ON waifu_cat(user_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_admins_user ON admins(user_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_rules_chat ON chat_rules(chat_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_warnings_user_chat ON user_warnings(user_id, chat_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishments_user_chat ON active_punishments(user_id, chat_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishment_history_user ON punishment_history(user_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishment_history_timestamp ON punishment_history(timestamp)')
 
             # Добавляем колонку для отслеживания последней ежедневной выдачи риса
             try:
@@ -83,6 +87,49 @@ def create_table():
                     created_at TEXT,
                     updated_by INTEGER,
                     updated_at TEXT
+                )
+            ''')
+
+            # Таблица для предупреждений (варнов)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_warnings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    reason TEXT,
+                    warned_by INTEGER NOT NULL,
+                    warned_at TEXT DEFAULT (datetime('now')),
+                    UNIQUE(user_id, chat_id)
+                )
+            ''')
+
+            # Таблица для активных наказаний
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS active_punishments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    punishment_type TEXT NOT NULL, -- 'ban', 'mute', 'warn'
+                    reason TEXT,
+                    punished_by INTEGER NOT NULL,
+                    punished_at TEXT DEFAULT (datetime('now')),
+                    expires_at TEXT, -- NULL для перманентных наказаний
+                    UNIQUE(user_id, chat_id, punishment_type)
+                )
+            ''')
+
+            # Таблица истории наказаний
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS punishment_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    punishment_type TEXT NOT NULL,
+                    action TEXT NOT NULL, -- 'added', 'removed', 'expired'
+                    reason TEXT,
+                    moderator_id INTEGER NOT NULL,
+                    timestamp TEXT DEFAULT (datetime('now')),
+                    duration_minutes INTEGER -- для временных наказаний
                 )
             ''')
 
@@ -495,42 +542,46 @@ def update_waifu_age(user_id: int, new_age: int, last_update_iso: str) -> bool:
 
 def add_user(user_id: int, nickname: str, username: str | None = None):
     """
-    Добавляет пользователя в БД с указанным ником и username.
+    Добавляет гражданина в БД с указанным ником и username.
     При повторном добавлении обновляет username.
-    Также выдает 1 миску риса новым пользователям.
+    Также выдает 1 миску риса новым гражданам.
     """
     conn = create_connection()
     if conn:
         try:
             cursor = conn.cursor()
 
-            # Проверяем, новый ли пользователь
+            # Проверяем, новый ли гражданин
             cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
             existing_user = cursor.fetchone()
 
-            cursor.execute(
-                """
-                INSERT INTO users (user_id, nickname, username)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    username = excluded.username
-                """,
-                (user_id, nickname, username),
-            )
-
-            # Если пользователь новый, выдаем 1 миску риса
-            if not existing_user:
+            if existing_user:
+                # Гражданин уже существует, обновляем только username
+                cursor.execute(
+                    "UPDATE users SET username = ? WHERE user_id = ?",
+                    (username, user_id),
+                )
+            else:
+                # Новый гражданин - добавляем с рейтингом 100
+                cursor.execute(
+                    """
+                    INSERT INTO users (user_id, nickname, username, reputation)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user_id, nickname, username, 100),
+                )
+                # Выдаем 1 миску риса
                 upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
-                logger.info(f"Новому пользователю {user_id} (@{username or 'нет'}) выдана 1 миска риса")
+                logger.info(f"Новому гражданину {user_id} (@{username or 'нет'}) установлен рейтинг 100 и выдана 1 миска риса")
 
             conn.commit()
         except Error as e:
-            logger.error(f"Ошибка при добавлении пользователя {user_id}: {e}")
+            logger.error(f"Ошибка при добавлении гражданина {user_id}: {e}")
         finally:
             conn.close()
 
 def get_user_nickname(user_id: int) -> str:
-    """Получает ник пользователя."""
+    """Получает ник гражданина."""
     conn = create_connection()
     if conn:
         try:
@@ -545,7 +596,7 @@ def get_user_nickname(user_id: int) -> str:
     return None
 
 def set_user_nickname(user_id: int, nickname: str):
-    """Устанавливает ник пользователя."""
+    """Устанавливает ник гражданина."""
     conn = create_connection()
     if conn:
         try:
@@ -559,7 +610,7 @@ def set_user_nickname(user_id: int, nickname: str):
             conn.close()
 
 def get_user_profile(user_id: int):
-    """Получает все данные пользователя для анкеты."""
+    """Получает все данные гражданина для анкеты."""
     conn = create_connection()
     if conn:
         try:
@@ -604,8 +655,8 @@ def get_user_by_username(username: str) -> int | None:
 
 def get_all_users() -> list[dict]:
     """
-    Возвращает список всех пользователей из базы данных.
-    Каждый пользователь представлен словарем с полями: user_id, nickname, username.
+    Возвращает список всех граждан из базы данных.
+    Каждый гражданин представлен словарем с полями: user_id, nickname, username.
     """
     conn = create_connection()
     if not conn:
@@ -635,7 +686,7 @@ def get_all_users() -> list[dict]:
 
 def update_user_username(user_id: int, username: str | None) -> bool:
     """
-    Обновляет username пользователя в базе данных.
+    Обновляет username гражданина в базе данных.
     """
     conn = create_connection()
     if not conn:
@@ -658,16 +709,16 @@ def update_user_username(user_id: int, username: str | None) -> bool:
 
 def delete_user_completely(username: str) -> bool:
     """
-    Полностью удаляет пользователя из системы по username.
+    Полностью удаляет гражданина из системы по username.
     Удаляет записи из всех таблиц: users, waifu_cat, hebao_items, admins.
-    Возвращает True если успешно удален хотя бы один пользователь.
+    Возвращает True если успешно удален хотя бы один гражданин.
     """
-    logger.info(f"Начинаем удаление пользователя @{username}")
+    logger.info(f"Начинаем удаление гражданина @{username}")
 
     # Сначала найдем user_id
     user_id = get_user_by_username(username)
     if not user_id:
-        logger.warning(f"Пользователь @{username} не найден в базе данных")
+        logger.warning(f"Гражданин @{username} не найден в базе данных")
         return False
 
     conn = create_connection()
@@ -688,7 +739,7 @@ def delete_user_completely(username: str) -> bool:
                 cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
             deleted_records += cursor.rowcount
             if cursor.rowcount > 0:
-                print(f"Удалено {cursor.rowcount} записей из таблицы {table} для пользователя @{username} (ID: {user_id})")
+                print(f"Удалено {cursor.rowcount} записей из таблицы {table} для гражданина @{username} (ID: {user_id})")
 
         conn.commit()
 
@@ -869,8 +920,8 @@ def give_daily_rice(user_id: int) -> bool:
 
 def reset_all_rice_to_one() -> int:
     """
-    Обнуляет количество риса у всех пользователей до 1 миски.
-    Возвращает количество обновленных пользователей.
+    Обнуляет количество риса у всех граждан до 1 миски.
+    Возвращает количество обновленных граждан.
     """
     conn = create_connection()
     if not conn:
@@ -880,7 +931,7 @@ def reset_all_rice_to_one() -> int:
     try:
         cursor = conn.cursor()
 
-        # Получаем всех пользователей с рисом
+        # Получаем всех граждан с рисом
         cursor.execute("SELECT user_id, quantity FROM hebao_items WHERE item_key = 'miska_risa' AND quantity > 1")
         users_with_rice = cursor.fetchall()
 
@@ -895,7 +946,7 @@ def reset_all_rice_to_one() -> int:
                 updated_count += 1
                 logger.info(f"Пользователь {user_id}: рис сброшен с {current_quantity} до 1 миски")
 
-        # Добавляем 1 миску риса пользователям, у которых ее нет вообще
+        # Добавляем 1 миску риса гражданам, у которых ее нет вообще
         cursor.execute("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM hebao_items WHERE item_key = 'miska_risa')")
         users_without_rice = cursor.fetchall()
 
@@ -905,7 +956,7 @@ def reset_all_rice_to_one() -> int:
             logger.info(f"Пользователь {user_id}: добавлена 1 миска риса")
 
         conn.commit()
-        logger.info(f"Сброс риса завершен. Обновлено {updated_count} пользователей")
+        logger.info(f"Сброс риса завершен. Обновлено {updated_count} граждан")
 
         return updated_count
 
@@ -916,9 +967,84 @@ def reset_all_rice_to_one() -> int:
         conn.close()
 
 
+def reset_all_ratings_to_default(default_rating: int = 100) -> int:
+    """
+    Сбрасывает рейтинг всех граждан до значения по умолчанию (100).
+    Возвращает количество обновленных граждан.
+    """
+    conn = create_connection()
+    if not conn:
+        logger.error("Не удалось подключиться к БД для сброса рейтинга")
+        return 0
+
+    try:
+        cursor = conn.cursor()
+
+        # Получаем всех граждан с текущим рейтингом
+        cursor.execute("SELECT user_id, reputation FROM users")
+        all_users = cursor.fetchall()
+
+        updated_count = 0
+        for user_id, current_rating in all_users:
+            if current_rating != default_rating:
+                cursor.execute(
+                    "UPDATE users SET reputation = ? WHERE user_id = ?",
+                    (default_rating, user_id)
+                )
+                if cursor.rowcount > 0:
+                    updated_count += 1
+                    logger.info(f"Гражданин {user_id}: рейтинг сброшен с {current_rating} до {default_rating}")
+
+        conn.commit()
+        logger.info(f"Сброс рейтинга завершен. Обновлено {updated_count} граждан до {default_rating}")
+
+        return updated_count
+
+    except Error as e:
+        logger.error(f"Ошибка при сбросе рейтинга: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def initialize_default_ratings(default_rating: int = 100) -> int:
+    """
+    Устанавливает рейтинг по умолчанию (100) всем гражданам, у которых рейтинг еще не установлен.
+    Используется для первичной инициализации.
+    Возвращает количество обновленных граждан.
+    """
+    conn = create_connection()
+    if not conn:
+        logger.error("Не удалось подключиться к БД для инициализации рейтинга")
+        return 0
+
+    try:
+        cursor = conn.cursor()
+
+        # Обновляем граждан, у которых рейтинг NULL или 0
+        cursor.execute(
+            "UPDATE users SET reputation = ? WHERE reputation IS NULL OR reputation = 0",
+            (default_rating,)
+        )
+
+        updated_count = cursor.rowcount
+        conn.commit()
+
+        if updated_count > 0:
+            logger.info(f"Инициализация рейтинга завершена. Установлено {default_rating} рейтинга для {updated_count} граждан")
+
+        return updated_count
+
+    except Error as e:
+        logger.error(f"Ошибка при инициализации рейтинга: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
 def process_daily_rice_distribution() -> int:
     """
-    Обрабатывает ежедневную выдачу риса всем пользователям.
+    Обрабатывает ежедневную выдачу риса всем гражданам.
     Вызывается раз в сутки.
     Возвращает количество пользователей, которым был выдан рис.
     """
@@ -932,7 +1058,7 @@ def process_daily_rice_distribution() -> int:
     try:
         cursor = conn.cursor()
 
-        # Получаем всех пользователей
+        # Получаем всех граждан
         cursor.execute("SELECT user_id FROM users")
         all_users = cursor.fetchall()
 
@@ -942,7 +1068,7 @@ def process_daily_rice_distribution() -> int:
             if give_daily_rice(user_id):
                 distributed_count += 1
 
-        logger.info(f"Ежедневная выдача риса завершена. Выдано {distributed_count} пользователям")
+        logger.info(f"Ежедневная выдача риса завершена. Выдано {distributed_count} гражданам")
         return distributed_count
 
     except Error as e:
@@ -1101,7 +1227,7 @@ def unrate_user(user_id: int, rate: int):
 
 
 def increment_user_activity(user_id: int) -> bool:
-    """Увеличивает счётчик активности пользователя на 1."""
+    """Увеличивает счётчик активности гражданина на 1."""
     conn = create_connection()
     if not conn:
         logger.error("Не удалось подключиться к БД для увеличения активности")
@@ -1117,8 +1243,8 @@ def increment_user_activity(user_id: int) -> bool:
         """, (user_id,))
 
         if cursor.rowcount == 0:
-            # Пользователь не найден, создаем его
-            logger.warning(f"Пользователь {user_id} не найден при увеличении активности, создаем")
+            # Гражданин не найден, создаем его
+            logger.warning(f"Гражданин {user_id} не найден при увеличении активности, создаем")
             add_user(user_id, "пользователь")
             # Повторяем попытку
             cursor.execute("""
@@ -1131,13 +1257,13 @@ def increment_user_activity(user_id: int) -> bool:
         return True
 
     except Error as e:
-        logger.error(f"Ошибка при инкременте активности пользователя {user_id}: {e}")
+        logger.error(f"Ошибка при инкременте активности гражданина {user_id}: {e}")
         return False
     finally:
         conn.close()
 
 def get_chat_leaderboard(limit: int = 10):
-    """Получает топ пользователей по активности."""
+    """Получает топ граждан по активности."""
     conn = create_connection()
     if conn:
         try:
@@ -1161,7 +1287,7 @@ def get_chat_leaderboard(limit: int = 10):
 
 
 def reset_daily_activity():
-    """Сбрасывает ежедневную активность всех пользователей."""
+    """Сбрасывает ежедневную активность всех граждан."""
     conn = create_connection()
     if not conn:
         logger.error("Не удалось подключиться к БД для сброса ежедневной активности")
@@ -1171,7 +1297,7 @@ def reset_daily_activity():
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET user_activity = 0")
         conn.commit()
-        logger.info("Ежедневная активность всех пользователей сброшена")
+        logger.info("Ежедневная активность всех граждан сброшена")
         return True
     except Error as e:
         logger.error(f"Ошибка при сбросе ежедневной активности: {e}")
@@ -1181,16 +1307,17 @@ def reset_daily_activity():
 
 
 def get_daily_top(limit: int = 5) -> list[tuple[str, int]]:
-    """Получает топ пользователей по активности за текущий день."""
+    """Получает топ граждан по активности за текущий день."""
     return get_chat_leaderboard(limit)
 
 
 def get_monthly_top(limit: int = 30) -> list[tuple[str, int]]:
-    """Получает топ пользователей по активности за текущий месяц."""
+    """Получает топ граждан по активности за текущий месяц."""
     # Пока что возвращаем общий топ, но в будущем можно добавить логику по месяцам
     return get_chat_leaderboard(limit)
 
 def get_rate_status(user_id: int) -> str:
+    """Возвращает букву ранга рейтинга (S, A, B, C, D, F)"""
     rate = get_user_rate(user_id)
     if rate >= 5001:
         return "S"
@@ -1207,6 +1334,352 @@ def get_rate_status(user_id: int) -> str:
     else:
         return "N/A"  # на случай, если rate None или что-то не так
 
+
+# --- ФУНКЦИИ ДЛЯ РАБОТЫ С НАКАЗАНИЯМИ ---
+
+def add_warning(user_id: int, chat_id: int, reason: str, warned_by: int) -> bool:
+    """
+    Добавляет предупреждение гражданину в чате.
+    Возвращает True если предупреждение добавлено успешно.
+    """
+    conn = create_connection()
+    if not conn:
+        logger.error("Не удалось подключиться к БД для добавления предупреждения")
+        return False
+
+    try:
+        cursor = conn.cursor()
+
+        # Добавляем предупреждение
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO user_warnings (user_id, chat_id, reason, warned_by, warned_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, chat_id, reason, warned_by, datetime.utcnow().isoformat())
+        )
+
+        # Добавляем в историю наказаний
+        cursor.execute(
+            """
+            INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id)
+            VALUES (?, ?, 'warn', 'added', ?, ?)
+            """,
+            (user_id, chat_id, reason, warned_by)
+        )
+
+        conn.commit()
+        logger.info(f"Гражданину {user_id} в чате {chat_id} выдано предупреждение модератором {warned_by}: {reason}")
+        return True
+
+    except Error as e:
+        logger.error(f"Ошибка при добавлении предупреждения гражданину {user_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def remove_warning(user_id: int, chat_id: int, removed_by: int) -> bool:
+    """
+    Снимает предупреждение с гражданина в чате.
+    Возвращает True если предупреждение снято успешно.
+    """
+    conn = create_connection()
+    if not conn:
+        logger.error("Не удалось подключиться к БД для снятия предупреждения")
+        return False
+
+    try:
+        cursor = conn.cursor()
+
+        # Получаем информацию о предупреждении перед удалением
+        cursor.execute(
+            "SELECT reason FROM user_warnings WHERE user_id = ? AND chat_id = ?",
+            (user_id, chat_id)
+        )
+        warning = cursor.fetchone()
+
+        if warning:
+            reason = warning[0]
+
+            # Удаляем предупреждение
+            cursor.execute(
+                "DELETE FROM user_warnings WHERE user_id = ? AND chat_id = ?",
+                (user_id, chat_id)
+            )
+
+            # Добавляем в историю наказаний
+            cursor.execute(
+                """
+                INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id)
+                VALUES (?, ?, 'warn', 'removed', ?, ?)
+                """,
+                (user_id, chat_id, reason, removed_by)
+            )
+
+            conn.commit()
+            logger.info(f"С гражданина {user_id} в чате {chat_id} снято предупреждение модератором {removed_by}")
+            return True
+        else:
+            logger.warning(f"У гражданина {user_id} в чате {chat_id} нет активных предупреждений")
+            return False
+
+    except Error as e:
+        logger.error(f"Ошибка при снятии предупреждения с гражданина {user_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_warnings_count(user_id: int, chat_id: int) -> int:
+    """
+    Возвращает количество активных предупреждений у гражданина в чате.
+    """
+    conn = create_connection()
+    if not conn:
+        return 0
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM user_warnings WHERE user_id = ? AND chat_id = ?",
+            (user_id, chat_id)
+        )
+        result = cursor.fetchone()
+        return result[0] if result else 0
+    except Error as e:
+        logger.error(f"Ошибка при получении количества предупреждений гражданина {user_id}: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def add_punishment(user_id: int, chat_id: int, punishment_type: str, reason: str, punished_by: int, duration_minutes: int = None) -> bool:
+    """
+    Добавляет наказание гражданину.
+    punishment_type: 'ban', 'mute', 'warn'
+    duration_minutes: None для перманентных наказаний
+    Возвращает True если наказание добавлено успешно.
+    """
+    conn = create_connection()
+    if not conn:
+        logger.error("Не удалось подключиться к БД для добавления наказания")
+        return False
+
+    try:
+        cursor = conn.cursor()
+
+        expires_at = None
+        if duration_minutes:
+            expires_at = (datetime.utcnow() + timedelta(minutes=duration_minutes)).isoformat()
+
+        # Добавляем активное наказание
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO active_punishments (user_id, chat_id, punishment_type, reason, punished_by, punished_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, chat_id, punishment_type, reason, punished_by, datetime.utcnow().isoformat(), expires_at)
+        )
+
+        # Добавляем в историю наказаний
+        cursor.execute(
+            """
+            INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id, duration_minutes)
+            VALUES (?, ?, ?, 'added', ?, ?, ?)
+            """,
+            (user_id, chat_id, punishment_type, reason, punished_by, duration_minutes)
+        )
+
+        conn.commit()
+        duration_text = f"на {duration_minutes} минут" if duration_minutes else "перманентно"
+        logger.info(f"Гражданину {user_id} в чате {chat_id} выдано наказание '{punishment_type}' {duration_text} модератором {punished_by}: {reason}")
+        return True
+
+    except Error as e:
+        logger.error(f"Ошибка при добавлении наказания гражданину {user_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def remove_punishment(user_id: int, chat_id: int, punishment_type: str, removed_by: int) -> bool:
+    """
+    Снимает наказание с гражданина.
+    Возвращает True если наказание снято успешно.
+    """
+    conn = create_connection()
+    if not conn:
+        logger.error("Не удалось подключиться к БД для снятия наказания")
+        return False
+
+    try:
+        cursor = conn.cursor()
+
+        # Получаем информацию о наказании перед удалением
+        cursor.execute(
+            "SELECT reason FROM active_punishments WHERE user_id = ? AND chat_id = ? AND punishment_type = ?",
+            (user_id, chat_id, punishment_type)
+        )
+        punishment = cursor.fetchone()
+
+        if punishment:
+            reason = punishment[0]
+
+            # Удаляем наказание
+            cursor.execute(
+                "DELETE FROM active_punishments WHERE user_id = ? AND chat_id = ? AND punishment_type = ?",
+                (user_id, chat_id, punishment_type)
+            )
+
+            # Добавляем в историю наказаний
+            cursor.execute(
+                """
+                INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id)
+                VALUES (?, ?, ?, 'removed', ?, ?)
+                """,
+                (user_id, chat_id, punishment_type, reason, removed_by)
+            )
+
+            conn.commit()
+            logger.info(f"С гражданина {user_id} в чате {chat_id} снято наказание '{punishment_type}' модератором {removed_by}")
+            return True
+        else:
+            logger.warning(f"У гражданина {user_id} в чате {chat_id} нет активного наказания '{punishment_type}'")
+            return False
+
+    except Error as e:
+        logger.error(f"Ошибка при снятии наказания с гражданина {user_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_active_punishments(user_id: int, chat_id: int) -> list[dict]:
+    """
+    Возвращает список активных наказаний гражданина в чате.
+    """
+    conn = create_connection()
+    if not conn:
+        return []
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT punishment_type, reason, punished_by, punished_at, expires_at FROM active_punishments WHERE user_id = ? AND chat_id = ?",
+            (user_id, chat_id)
+        )
+        punishments = cursor.fetchall()
+
+        result = []
+        for punishment in punishments:
+            result.append({
+                'type': punishment[0],
+                'reason': punishment[1],
+                'punished_by': punishment[2],
+                'punished_at': punishment[3],
+                'expires_at': punishment[4]
+            })
+        return result
+
+    except Error as e:
+        logger.error(f"Ошибка при получении активных наказаний гражданина {user_id}: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_expired_punishments() -> list[dict]:
+    """
+    Возвращает список истекших наказаний для автоматического снятия.
+    """
+    conn = create_connection()
+    if not conn:
+        return []
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT user_id, chat_id, punishment_type, reason, punished_by
+            FROM active_punishments
+            WHERE expires_at IS NOT NULL AND expires_at < ?
+            """,
+            (datetime.utcnow().isoformat(),)
+        )
+        punishments = cursor.fetchall()
+
+        result = []
+        for punishment in punishments:
+            result.append({
+                'user_id': punishment[0],
+                'chat_id': punishment[1],
+                'type': punishment[2],
+                'reason': punishment[3],
+                'punished_by': punishment[4]
+            })
+        return result
+
+    except Error as e:
+        logger.error(f"Ошибка при получении истекших наказаний: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def cleanup_expired_punishments() -> int:
+    """
+    Автоматически снимает истекшие наказания.
+    Возвращает количество снятых наказаний.
+    """
+    expired_punishments = get_expired_punishments()
+    cleaned_count = 0
+
+    for punishment in expired_punishments:
+        if remove_punishment(punishment['user_id'], punishment['chat_id'], punishment['type'], 0):  # 0 как системный пользователь
+            # Добавляем запись об истечении в историю
+            conn = create_connection()
+            if conn:
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id)
+                        VALUES (?, ?, ?, 'expired', ?, 0)
+                        """,
+                        (punishment['user_id'], punishment['chat_id'], punishment['type'], punishment['reason'])
+                    )
+                    conn.commit()
+                    cleaned_count += 1
+                except Error as e:
+                    logger.error(f"Ошибка при добавлении записи об истечении наказания: {e}")
+                finally:
+                    conn.close()
+
+    if cleaned_count > 0:
+        logger.info(f"Автоматически снято {cleaned_count} истекших наказаний")
+
+    return cleaned_count
+
+
+def get_rate_display(user_id: int) -> str:
+    """Возвращает красивое отображение рейтинга с эмодзи и текстом"""
+    rate = get_user_rate(user_id)
+    if rate >= 5001:
+        return f"👑 Ваш социальный рейтинг: {rate} (S)"
+    elif 3501 <= rate <= 5000:
+        return f"🐉 Ваш социальный рейтинг: {rate} (A)"
+    elif 1001 <= rate <= 3500:
+        return f"☀️ Ваш социальный рейтинг: {rate} (B)"
+    elif 51 <= rate <= 1000:
+        return f"🍀 Ваш социальный рейтинг: {rate} (C)"
+    elif -499 <= rate <= 50:
+        return f"😈 Ваш социальный рейтинг: {rate} (D)"
+    elif rate <= -500:
+        return f"☠️ Ваш социальный рейтинг: {rate} (F)"
+    else:
+        return f"❓ Ваш социальный рейтинг: {rate} (N/A)"
+
 # Регистрация самой анкеты, берет информацию из БД(будет использоваться и для профиля частично)
 async def get_profile_text(user_id: int) -> str:
     """
@@ -1214,8 +1687,8 @@ async def get_profile_text(user_id: int) -> str:
     Эту функцию можно будет использовать в любом роутере.
     """
     profile_data = get_user_profile(user_id)
-    rank = get_rate_status(user_id)
-    
+    rate_display = get_rate_display(user_id)
+
     if profile_data:
         # Безопасное получение данных с значениями по умолчанию
         nickname = profile_data.get("nickname", "Не указано")
@@ -1228,7 +1701,7 @@ async def get_profile_text(user_id: int) -> str:
             f"👤 **Досье гражданина**\n\n"
             f"🗃️ **Учётное имя:** `{nickname}`\n"
             f"🆔 **Публичный цифровой идентификатор:** `{user_id}`\n\n"
-            f"🍚 **Социальный рейтинг:** {reputation} ({rank})\n"
+            f"{rate_display}\n"
             f"☀️ **Активность:** {activity}\n\n"
             f"📄 **Описание:**\n_{description}_"
         )

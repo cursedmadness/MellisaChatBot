@@ -43,6 +43,10 @@ BOT_TOKEN = os.getenv('TOKEN')  # Токен бота из переменной 
 PARSE_MODE = "HTML"  # Режим парсинга сообщений
 LINK_PREVIEW_DISABLED = True  # Отключить превью ссылок
 
+# Pyrogram настройки для модерации (получить на https://my.telegram.org/)
+API_ID = os.getenv('API_ID')
+API_HASH = os.getenv('API_HASH')
+
 # Настройки кормления кошки
 SATISFACTION_DECAY_HOURS = 5  # Часы до уменьшения сытости
 SATISFACTION_DECAY_AMOUNT = 10  # Количество сытости, теряемое за период
