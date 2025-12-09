@@ -1,6 +1,9 @@
 import sqlite3
 from sqlite3 import Error
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 DB_NAME = "users.db"  # Имя файла БД
 
@@ -15,9 +18,9 @@ def create_connection():
      return conn
 
 def create_table():
-     """Создаёт таблицу users и admins и waifu_cats, если её нет."""
-     conn = create_connection()
-     if conn:
+    """Создаёт таблицу users и admins и waifu_cats, если её нет."""
+    conn = create_connection()
+    if conn:
         try:
             cursor = conn.cursor()
             cursor.execute('''
@@ -43,13 +46,36 @@ def create_table():
             )''')
 
             cursor.execute('''
+                CREATE TABLE IF NOT EXISTS hebao_items (
+                    item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    item_key TEXT NOT NULL,
+                    item_name TEXT NOT NULL,
+                    quantity INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT,
+                    UNIQUE(user_id, item_key)
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS chat_rules (
+                    chat_id INTEGER PRIMARY KEY,
+                    rules_text TEXT NOT NULL,
+                    created_by INTEGER,
+                    created_at TEXT,
+                    updated_by INTEGER,
+                    updated_at TEXT
+                )
+            ''')
+
+            cursor.execute('''
                 CREATE TABLE IF NOT EXISTS admins (
                     user_id INTEGER PRIMARY KEY,
                     first_name TEXT
                 )
             ''')
             conn.commit()
-            print("Проверка/создание таблицы 'users, admins, waifu_cats' выполнено.")
+            print("Проверка/создание таблицы 'users, admins, waifu_cats, chat_rules' выполнено.")
         except Error as e:
             print(e)
         finally:
@@ -116,6 +142,136 @@ def add_new_columns():
             print(f"Произошла ошибка при добавлении столбцов: {e}")
         finally:
             conn.close()
+
+
+# --- Функции для хэбао (инвентарь) ---
+
+def _hebao_row_to_dict(row):
+    if not row:
+        return None
+    return {
+        "item_id": row[0],
+        "user_id": row[1],
+        "item_key": row[2],
+        "item_name": row[3],
+        "quantity": row[4],
+        "updated_at": row[5],
+    }
+
+
+def get_hebao_items(user_id: int) -> list[dict]:
+    """Возвращает список предметов хэбао пользователя (только с количеством > 0)."""
+    conn = create_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT item_id, user_id, item_key, item_name, quantity, updated_at
+            FROM hebao_items
+            WHERE user_id = ? AND quantity > 0
+            ORDER BY item_name
+            """,
+            (user_id,),
+        )
+        rows = cursor.fetchall()
+        return [_hebao_row_to_dict(r) for r in rows if r]
+    except Error as e:
+        print(e)
+        return []
+    finally:
+        conn.close()
+
+
+def upsert_hebao_item(
+    user_id: int,
+    item_key: str,
+    item_name: str | None = None,
+    *,
+    delta: int | None = None,
+    set_value: int | None = None,
+) -> bool:
+    """
+    Добавляет/обновляет предмет в хэбао.
+    - set_value: жёстко устанавливает количество (не меньше 0)
+    - delta: прибавляет/вычитает от текущего количества (не опуская ниже 0)
+    """
+    if not item_key:
+        return False
+
+    conn = create_connection()
+    if not conn:
+        return False
+
+    try:
+        cursor = conn.cursor()
+        now_iso = datetime.utcnow().isoformat()
+        display_name = item_name or item_key
+
+        if set_value is not None:
+            new_qty = max(int(set_value), 0)
+        else:
+            cursor.execute(
+                "SELECT quantity FROM hebao_items WHERE user_id = ? AND item_key = ?",
+                (user_id, item_key),
+            )
+            row = cursor.fetchone()
+            current_qty = row[0] if row else 0
+            delta_val = int(delta or 0)
+            new_qty = current_qty + delta_val
+            if new_qty < 0:
+                new_qty = 0
+
+        cursor.execute(
+            """
+            INSERT INTO hebao_items (user_id, item_key, item_name, quantity, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, item_key) DO UPDATE SET
+                item_name = excluded.item_name,
+                quantity = excluded.quantity,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, item_key, display_name, new_qty, now_iso),
+        )
+        conn.commit()
+        return True
+    except Error as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
+
+def get_hebao_overview(user_id: int, merge_waifu_rice: bool = True) -> list[dict]:
+    """
+    Возвращает список предметов в хэбао.
+    При merge_waifu_rice дополнительно добавляет миски риса из профиля кошки.
+    """
+    items = get_hebao_items(user_id)
+    items_by_key = {item["item_key"]: item for item in items if item}
+
+    if merge_waifu_rice:
+        waifu = get_waifu_by_user(user_id)
+        bowls = 0
+        if waifu and waifu.get("miska_risa") is not None:
+            bowls = int(waifu.get("miska_risa") or 0)
+
+        if bowls > 0:
+            rice_item = items_by_key.get("miska_risa")
+            if rice_item:
+                rice_item["quantity"] += bowls
+            else:
+                items_by_key["miska_risa"] = {
+                    "item_id": None,
+                    "user_id": user_id,
+                    "item_key": "miska_risa",
+                    "item_name": "миска риса",
+                    "quantity": bowls,
+                    "updated_at": waifu.get("last_satiety_update") if waifu else None,
+                }
+
+    return sorted(items_by_key.values(), key=lambda x: x["item_name"].lower())
 
 
 # --- Функции для работы с waifu_cat ---
@@ -387,6 +543,222 @@ def get_user_profile(user_id: int):
         finally:
             conn.close()
     return None
+
+
+def get_user_by_username(username: str) -> int | None:
+    """Ищет user_id по username в базе данных."""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM users WHERE username = ?", (username,))
+            result = cursor.fetchone()
+            return result[0] if result else None
+        except Error as e:
+            print(e)
+        finally:
+            conn.close()
+    return None
+
+
+def get_all_users() -> list[dict]:
+    """
+    Возвращает список всех пользователей из базы данных.
+    Каждый пользователь представлен словарем с полями: user_id, nickname, username.
+    """
+    conn = create_connection()
+    if not conn:
+        return []
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, nickname, username FROM users ORDER BY user_id")
+        rows = cursor.fetchall()
+
+        users = []
+        for row in rows:
+            users.append({
+                "user_id": row[0],
+                "nickname": row[1] or "нет",
+                "username": row[2] or "нет"
+            })
+
+        return users
+
+    except Error as e:
+        print(f"Ошибка при получении списка пользователей: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def update_user_username(user_id: int, username: str | None) -> bool:
+    """
+    Обновляет username пользователя в базе данных.
+    """
+    conn = create_connection()
+    if not conn:
+        return False
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET username = ? WHERE user_id = ?",
+            (username, user_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Error as e:
+        print(f"Ошибка при обновлении username для user_id {user_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def delete_user_completely(username: str) -> bool:
+    """
+    Полностью удаляет пользователя из системы по username.
+    Удаляет записи из всех таблиц: users, waifu_cat, hebao_items, admins.
+    Возвращает True если успешно удален хотя бы один пользователь.
+    """
+    logger.info(f"Начинаем удаление пользователя @{username}")
+
+    # Сначала найдем user_id
+    user_id = get_user_by_username(username)
+    if not user_id:
+        logger.warning(f"Пользователь @{username} не найден в базе данных")
+        return False
+
+    conn = create_connection()
+    if not conn:
+        return False
+
+    try:
+        cursor = conn.cursor()
+
+        # Удаляем из всех таблиц
+        tables_to_clean = ['hebao_items', 'waifu_cat', 'admins', 'users']
+        deleted_records = 0
+
+        for table in tables_to_clean:
+            if table == 'users':
+                cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+            else:
+                cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+            deleted_records += cursor.rowcount
+            if cursor.rowcount > 0:
+                print(f"Удалено {cursor.rowcount} записей из таблицы {table} для пользователя @{username} (ID: {user_id})")
+
+        conn.commit()
+
+        if deleted_records > 0:
+            logger.info(f"Пользователь @{username} (ID: {user_id}) полностью удален из системы. Всего удалено {deleted_records} записей")
+            return True
+        else:
+            logger.warning(f"Не найдено записей для удаления пользователя @{username} (ID: {user_id})")
+            return False
+
+    except Error as e:
+        logger.error(f"Ошибка при удалении пользователя @{username}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+# --- Функции для работы с правилами чата ---
+
+def save_chat_rules(chat_id: int, rules_text: str, user_id: int) -> bool:
+    """
+    Сохраняет или обновляет правила чата.
+    Возвращает True при успехе.
+    """
+    conn = create_connection()
+    if not conn:
+        logger.error("Не удалось подключиться к базе данных")
+        return False
+
+    try:
+        cursor = conn.cursor()
+        now_iso = datetime.utcnow().isoformat()
+
+        cursor.execute('''
+            INSERT INTO chat_rules (chat_id, rules_text, created_by, created_at, updated_by, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                rules_text = excluded.rules_text,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+        ''', (chat_id, rules_text, user_id, now_iso, user_id, now_iso))
+
+        conn.commit()
+        if cursor.rowcount > 0:
+            logger.info(f"Правила чата {chat_id} сохранены пользователем {user_id}")
+            return True
+        else:
+            logger.warning(f"Не удалось сохранить правила чата {chat_id}")
+            return False
+
+    except Error as e:
+        logger.error(f"Ошибка при сохранении правил чата {chat_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_chat_rules(chat_id: int) -> str | None:
+    """
+    Получает правила чата по chat_id.
+    Возвращает текст правил или None если правил нет.
+    """
+    conn = create_connection()
+    if not conn:
+        return None
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT rules_text FROM chat_rules WHERE chat_id = ?", (chat_id,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+
+    except Error as e:
+        print(f"Ошибка при получении правил чата {chat_id}: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_chat_rules_info(chat_id: int) -> dict | None:
+    """
+    Получает полную информацию о правилах чата.
+    Возвращает словарь с данными или None.
+    """
+    conn = create_connection()
+    if not conn:
+        return None
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT rules_text, created_by, created_at, updated_by, updated_at
+            FROM chat_rules WHERE chat_id = ?
+        ''', (chat_id,))
+
+        result = cursor.fetchone()
+        if result:
+            return {
+                "rules_text": result[0],
+                "created_by": result[1],
+                "created_at": result[2],
+                "updated_by": result[3],
+                "updated_at": result[4]
+            }
+        return None
+
+    except Error as e:
+        print(f"Ошибка при получении информации о правилах чата {chat_id}: {e}")
+        return None
+    finally:
+        conn.close()
 
 
 def set_user_description(user_id: int, description: str):

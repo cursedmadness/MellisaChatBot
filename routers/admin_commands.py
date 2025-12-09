@@ -3,6 +3,7 @@ from aiogram.filters.command import Command
 from aiogram.types import Message
 from aiogram.exceptions import TelegramBadRequest
 from aiogram import Bot
+import logging
 
 from database import (
     is_admin,
@@ -12,14 +13,20 @@ from database import (
     update_user_rate,
     unrate_user,
     add_user,
+    delete_user_completely,
+    get_all_users,
+    get_user_by_username,
+    update_user_username,
 )
 
 ADMIN_IDS = [1534963580, 1103985703, 5806584445] # - ИД администраторов, у кого есть доступ к командам. Нужно будет настроить через бд.
 
 admin_router = Router() # подключение роутеров
-admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS)) 
+admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
 # Позволяет использовать команды ТОЛЬКО администраторам из бд.
 # (Сделать разницу между простыми администраторами(префикс) и администрации чата)
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_user_exists(user_id: int, first_name: str | None = None) -> None:
@@ -61,18 +68,22 @@ async def ban_user(message: Message, bot: Bot): # type: ignore
 
         # Проверяем, что banned_user найден
         if not banned_user:
+            logger.warning(f"Не удалось определить пользователя для бана в чате {message.chat.id}")
             await message.answer("Не удалось определить пользователя для бана.")
             return
 
         # Проверяем, что пользователь не пытается забанить сам себя
         if banned_user.id == message.from_user.id:
+            logger.warning(f"Пользователь {message.from_user.id} попытался забанить сам себя")
             await message.answer("❌ Партия не одобряет самовыпил")
             return
 
         # Выполняем бан
         try:
             await bot.ban_chat_member(chat_id=message.chat.id, user_id=banned_user.id)
+            logger.info(f"Пользователь {banned_user.id} забанен администратором {message.from_user.id} в чате {message.chat.id}")
         except TelegramBadRequest as e:
+            logger.error(f"Ошибка при бане пользователя {banned_user.id}: {str(e)}")
             await message.answer(f"Ошибка при бане пользователя: {str(e)}")
             return
 
@@ -318,7 +329,7 @@ async def unrate(message: Message):
             # Случай 2: Команда с аргументом (@username)
             if args.startswith('@'):
                 username = args[1:].strip()
-                user_id = get_user_id_by_username(username)
+                user_id = get_user_by_username(username)
                 
                 if user_id:
                     _ensure_user_exists(user_id, username)
@@ -356,13 +367,46 @@ async def unrate(message: Message):
         await message.reply(f"❌ Ошибка: {str(e)}")
 
 
-# Вспомогательная функция для поиска user_id по username
-def get_user_id_by_username(username: str) -> int:
-    # conn = sqlite3.connect('your_database.db')
-    # cursor = conn.cursor()
-    # cursor.execute('SELECT user_id FROM users WHERE username = ?', (username,))
-    # result = cursor.fetchone()
-    # conn.close()
-    # return result[0] if result else None
-    
-    return None
+
+@admin_router.message(Command("delete_user"))
+@admin_router.message(F.text.lower().startswith("обнулить"))
+async def delete_user_command(message: Message):
+    """
+    Команда для администраторов: полностью удаляет пользователя из системы.
+    Формат: /delete_user @username или обнулить @username
+    """
+    if not is_admin(message.from_user.id):
+        await message.reply("❌ У вас нет прав для выполнения этой команды.")
+        return
+
+    text = message.text.strip()
+
+    # Определяем username из команды
+    if text.lower().startswith("обнулить"):
+        username_part = text[8:].strip()  # Убираем "обнулить "
+    else:
+        username_part = text[12:].strip()  # Убираем "/delete_user "
+
+    if not username_part.startswith("@"):
+        await message.reply("❌ Укажите username в формате @username\nПример: /delete_user @username")
+        return
+
+    username = username_part[1:].strip()  # Убираем @
+
+    if not username:
+        await message.reply("❌ Укажите username после команды.\nПример: /delete_user @username")
+        return
+
+    # Выполняем удаление
+    logger.info(f"Администратор {message.from_user.id} начинает удаление пользователя @{username}")
+    success = delete_user_completely(username)
+
+    if success:
+        logger.info(f"Администратор {message.from_user.id} успешно удалил пользователя @{username}")
+        await message.reply(
+            f"✅ Пользователь @{username} полностью удален из системы.\n"
+            f"Удалены все данные: профиль, кошко-жена, хэбао, админские права."
+        )
+    else:
+        logger.warning(f"Администратор {message.from_user.id} не смог удалить пользователя @{username} - пользователь не найден")
+        await message.reply(f"❌ Пользователь @{username} не найден в базе данных.")
