@@ -90,6 +90,33 @@ def create_table():
                 )
             ''')
 
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admins (
+                    user_id INTEGER PRIMARY KEY,
+                    first_name TEXT
+                )
+            ''')
+            conn.commit()
+            print("Проверка/создание таблицы 'users, admins, waifu_cats, chat_rules' выполнено.")
+        except Error as e:
+            print(e)
+        finally:
+            conn.close()
+
+# --- НОВАЯ ФУНКЦИЯ ДЛЯ ДОБАВЛЕНИЯ СТОЛБЦОВ ---
+def add_new_columns():
+    """
+    Добавляет новые столбцы (Description, Reputation, User_activity)
+    в таблицу users, если они еще не существуют.
+    А также дополнительные поля для waifu_cat из требований роутера.
+    Также создает таблицы для системы модерации.
+    """
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # Создаем таблицы модерации, если они не существуют
             # Таблица для предупреждений (варнов)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_warnings (
@@ -133,30 +160,11 @@ def create_table():
                 )
             ''')
 
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS admins (
-                    user_id INTEGER PRIMARY KEY,
-                    first_name TEXT
-                )
-            ''')
-            conn.commit()
-            print("Проверка/создание таблицы 'users, admins, waifu_cats, chat_rules' выполнено.")
-        except Error as e:
-            print(e)
-        finally:
-            conn.close()
-
-# --- НОВАЯ ФУНКЦИЯ ДЛЯ ДОБАВЛЕНИЯ СТОЛБЦОВ ---
-def add_new_columns():
-    """
-    Добавляет новые столбцы (Description, Reputation, User_activity)
-    в таблицу users, если они еще не существуют.
-    А также дополнительные поля для waifu_cat из требований роутера.
-    """
-    conn = create_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
+            # Создаем индексы для таблиц модерации
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_warnings_user_chat ON user_warnings(user_id, chat_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishments_user_chat ON active_punishments(user_id, chat_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishment_history_user ON punishment_history(user_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishment_history_timestamp ON punishment_history(timestamp)')
             
             # Словарь: имя_столбца -> тип_данных_и_ограничения
             columns_users = {
@@ -1622,6 +1630,7 @@ def get_expired_punishments() -> list[dict]:
 
     except Error as e:
         logger.error(f"Ошибка при получении истекших наказаний: {e}")
+        # Если таблица не существует, возвращаем пустой список
         return []
     finally:
         conn.close()
@@ -1632,34 +1641,38 @@ def cleanup_expired_punishments() -> int:
     Автоматически снимает истекшие наказания.
     Возвращает количество снятых наказаний.
     """
-    expired_punishments = get_expired_punishments()
-    cleaned_count = 0
+    try:
+        expired_punishments = get_expired_punishments()
+        cleaned_count = 0
 
-    for punishment in expired_punishments:
-        if remove_punishment(punishment['user_id'], punishment['chat_id'], punishment['type'], 0):  # 0 как системный пользователь
-            # Добавляем запись об истечении в историю
-            conn = create_connection()
-            if conn:
-                try:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """
-                        INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id)
-                        VALUES (?, ?, ?, 'expired', ?, 0)
-                        """,
-                        (punishment['user_id'], punishment['chat_id'], punishment['type'], punishment['reason'])
-                    )
-                    conn.commit()
-                    cleaned_count += 1
-                except Error as e:
-                    logger.error(f"Ошибка при добавлении записи об истечении наказания: {e}")
-                finally:
-                    conn.close()
+        for punishment in expired_punishments:
+            if remove_punishment(punishment['user_id'], punishment['chat_id'], punishment['type'], 0):  # 0 как системный пользователь
+                # Добавляем запись об истечении в историю
+                conn = create_connection()
+                if conn:
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            """
+                            INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id)
+                            VALUES (?, ?, ?, 'expired', ?, 0)
+                            """,
+                            (punishment['user_id'], punishment['chat_id'], punishment['type'], punishment['reason'])
+                        )
+                        conn.commit()
+                        cleaned_count += 1
+                    except Error as e:
+                        logger.error(f"Ошибка при добавлении записи об истечении наказания: {e}")
+                    finally:
+                        conn.close()
 
-    if cleaned_count > 0:
-        logger.info(f"Автоматически снято {cleaned_count} истекших наказаний")
+        if cleaned_count > 0:
+            logger.info(f"Автоматически снято {cleaned_count} истекших наказаний")
 
-    return cleaned_count
+        return cleaned_count
+    except Exception as e:
+        logger.warning(f"Не удалось выполнить очистку истекших наказаний (возможно, таблицы еще не созданы): {e}")
+        return 0
 
 
 def get_rate_display(user_id: int) -> str:
