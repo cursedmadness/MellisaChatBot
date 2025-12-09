@@ -450,7 +450,9 @@ async def feed_cat(message: Message):
     rice_updated = upsert_hebao_item(user_id, "miska_risa", "миска риса", delta=-1)
 
     if cat_updated and rice_updated:
+        logger.info(f"Пользователь {user_id} покормил кошку, потратив 1 миску риса")
         await message.answer(f"Кошка покормлена. Сытость: 100. Осталось мисок: {bowls - 1}.")
     else:
+        logger.warning(f"Не удалось покормить кошку пользователю {user_id}: cat_updated={cat_updated}, rice_updated={rice_updated}")
         await message.answer("Не удалось накормить кошку. Попробуй ещё раз.")
 

@@ -3,6 +3,8 @@ from sqlite3 import Error
 from datetime import datetime
 import logging
 
+from config import MAX_RICE_PER_USER
+
 logger = logging.getLogger(__name__)
 
 DB_NAME = "users.db"  # Имя файла БД
@@ -56,6 +58,15 @@ def create_table():
                     UNIQUE(user_id, item_key)
                 )
             ''')
+
+            # Создаем индексы для оптимизации запросов
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_hebao_user_item ON hebao_items(user_id, item_key)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_hebao_quantity ON hebao_items(quantity)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_activity ON users(user_activity)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_waifu_user ON waifu_cat(user_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_admins_user ON admins(user_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_rules_chat ON chat_rules(chat_id)')
 
             # Добавляем колонку для отслеживания последней ежедневной выдачи риса
             try:
@@ -340,7 +351,7 @@ def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category: str 
         # Если кошка создана впервые, убеждаемся что есть 1 миска риса
         if created:
             upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
-            logger.info(f"При создании кошки пользователю {user_id} выдана 1 миска риса")
+            logger.info(f"Кошка создана для пользователя {user_id}, выдана 1 миска риса")
 
         conn.commit()
         return created
@@ -820,14 +831,14 @@ def get_user_rice_count(user_id: int) -> int:
 
 def give_daily_rice(user_id: int) -> bool:
     """
-    Выдает 1 миску риса пользователю, если у него меньше 6 мисок.
+    Выдает 1 миску риса пользователю, если у него меньше максимального количества.
     Обновляет время последней выдачи.
     Возвращает True если рис был выдан.
     """
     rice_count = get_user_rice_count(user_id)
 
-    if rice_count >= 6:
-        logger.info(f"Пользователь {user_id} имеет {rice_count} мисок риса (>=6), ежедневная выдача пропущена")
+    if rice_count >= MAX_RICE_PER_USER:
+        logger.info(f"Пользователь {user_id} имеет {rice_count} мисок риса (>={MAX_RICE_PER_USER}), ежедневная выдача пропущена")
         return False
 
     # Выдаем 1 миску риса
@@ -1089,23 +1100,41 @@ def unrate_user(user_id: int, rate: int):
         conn.close()
 
 
-def increment_user_activity(user_id: int):
+def increment_user_activity(user_id: int) -> bool:
     """Увеличивает счётчик активности пользователя на 1."""
     conn = create_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            # Используем SQL для атомарного увеличения значения
+    if not conn:
+        logger.error("Не удалось подключиться к БД для увеличения активности")
+        return False
+
+    try:
+        cursor = conn.cursor()
+        # Используем SQL для атомарного увеличения значения
+        cursor.execute("""
+            UPDATE users
+            SET user_activity = user_activity + 1
+            WHERE user_id = ?
+        """, (user_id,))
+
+        if cursor.rowcount == 0:
+            # Пользователь не найден, создаем его
+            logger.warning(f"Пользователь {user_id} не найден при увеличении активности, создаем")
+            add_user(user_id, "пользователь")
+            # Повторяем попытку
             cursor.execute("""
-                UPDATE users 
-                SET User_activity = User_activity + 1 
+                UPDATE users
+                SET user_activity = user_activity + 1
                 WHERE user_id = ?
             """, (user_id,))
-            conn.commit()
-        except Error as e:
-            print(f"Ошибка при инкременте активности: {e}")
-        finally:
-            conn.close()
+
+        conn.commit()
+        return True
+
+    except Error as e:
+        logger.error(f"Ошибка при инкременте активности пользователя {user_id}: {e}")
+        return False
+    finally:
+        conn.close()
 
 def get_chat_leaderboard(limit: int = 10):
     """Получает топ пользователей по активности."""
@@ -1116,19 +1145,50 @@ def get_chat_leaderboard(limit: int = 10):
             # Выбираем ник и активность, сортируем по убыванию активности
             # LIMIT ограничивает вывод, чтобы не спамить в чат
             cursor.execute("""
-                SELECT nickname, User_activity 
-                FROM users 
+                SELECT nickname, User_activity
+                FROM users
                 WHERE User_activity > 0
-                ORDER BY User_activity DESC 
+                ORDER BY User_activity DESC
                 LIMIT ?
             """, (limit,))
             # Возвращаем список кортежей (ник, активность)
             return cursor.fetchall()
         except Error as e:
-            print(f"Ошибка при получении лидерборда: {e}")
+            logger.error(f"Ошибка при получении лидерборда: {e}")
         finally:
             conn.close()
     return []
+
+
+def reset_daily_activity():
+    """Сбрасывает ежедневную активность всех пользователей."""
+    conn = create_connection()
+    if not conn:
+        logger.error("Не удалось подключиться к БД для сброса ежедневной активности")
+        return False
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET user_activity = 0")
+        conn.commit()
+        logger.info("Ежедневная активность всех пользователей сброшена")
+        return True
+    except Error as e:
+        logger.error(f"Ошибка при сбросе ежедневной активности: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_daily_top(limit: int = 5) -> list[tuple[str, int]]:
+    """Получает топ пользователей по активности за текущий день."""
+    return get_chat_leaderboard(limit)
+
+
+def get_monthly_top(limit: int = 30) -> list[tuple[str, int]]:
+    """Получает топ пользователей по активности за текущий месяц."""
+    # Пока что возвращаем общий топ, но в будущем можно добавить логику по месяцам
+    return get_chat_leaderboard(limit)
 
 def get_rate_status(user_id: int) -> str:
     rate = get_user_rate(user_id)

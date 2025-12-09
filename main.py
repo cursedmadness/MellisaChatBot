@@ -5,66 +5,99 @@ import asyncio
 from database import create_table, add_new_columns, initialize_admins, process_daily_rice_distribution
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from routers.admin_commands import ADMIN_IDS
-from dotenv import load_dotenv
-import os
+from config import (
+    BOT_TOKEN, PARSE_MODE, LINK_PREVIEW_DISABLED, LOG_LEVEL, LOG_FORMAT,
+    DAILY_RICE_TIME_HOUR, ADMIN_IDS
+)
 import logging
 from datetime import datetime, time, timedelta
+from dotenv import load_dotenv
 
+# Загружаем переменные окружения из .env файла
 load_dotenv()
-token=os.getenv('TOKEN')
 
-bot=Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True)) #type: ignore
-# Подключение бота(с оформлением смс)
-dp=Dispatcher()
-
-dp.include_router(main_router) # Подключение всех роутеров
-
-# Базовая настройка логов
+# Настройка логирования
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
+    format=LOG_FORMAT,
 )
 logger = logging.getLogger(__name__)
+
+# Проверка токена бота
+if not BOT_TOKEN:
+    logger.error("Токен бота не найден! Установите переменную окружения TOKEN")
+    logger.error("Пример: export TOKEN='ваш_токен_бота'")
+    raise ValueError("Токен бота не настроен. Проверьте переменную окружения TOKEN")
+
+# Инициализация бота
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(
+        parse_mode=getattr(ParseMode, PARSE_MODE.upper(), ParseMode.HTML),
+        link_preview_is_disabled=LINK_PREVIEW_DISABLED
+    )
+)
+dp = Dispatcher()
+dp.include_router(main_router)
 
 
 async def daily_rice_task():
     """
-    Фоновая задача для ежедневной выдачи риса в 9:00 утра по UTC.
+    Фоновая задача для ежедневной выдачи риса в заданное время по UTC.
     """
     while True:
-        now = datetime.utcnow()
+        try:
+            now = datetime.utcnow()
 
-        # Вычисляем время до следующего 9:00 UTC
-        target_time = time(9, 0, 0)  # 9:00 UTC
-        next_run = datetime.combine(now.date(), target_time)
+            # Вычисляем время до следующего запуска
+            target_time = time(DAILY_RICE_TIME_HOUR, 0, 0)
+            next_run = datetime.combine(now.date(), target_time)
 
-        if now.time() >= target_time:
-            # Если уже прошло 9:00, ждем до завтра
-            next_run = datetime.combine(now.date() + timedelta(days=1), target_time)
+            if now.time() >= target_time:
+                # Если уже прошло время, ждем до завтра
+                next_run = datetime.combine(now.date() + timedelta(days=1), target_time)
 
-        seconds_until_next = (next_run - now).total_seconds()
+            seconds_until_next = (next_run - now).total_seconds()
 
-        logger.info(".1f")
-        await asyncio.sleep(seconds_until_next)
+            logger.info(f"Следующая выдача риса через {seconds_until_next:.1f} секунд (в {DAILY_RICE_TIME_HOUR}:00 UTC)")
+            await asyncio.sleep(seconds_until_next)
 
-        # Выполняем ежедневную выдачу риса
-        logger.info("Начинается ежедневная выдача риса...")
-        distributed = process_daily_rice_distribution()
-        logger.info(f"Ежедневная выдача риса завершена. Выдано {distributed} пользователям")
+            # Выполняем ежедневную выдачу риса
+            logger.info("Начинается ежедневная выдача риса...")
+            distributed = process_daily_rice_distribution()
+            logger.info(f"Ежедневная выдача риса завершена. Выдано {distributed} пользователям")
+
+        except Exception as e:
+            logger.error(f"Ошибка в задаче ежедневной выдачи риса: {e}")
+            await asyncio.sleep(60)  # Ждем минуту перед повторной попыткой
 
 
 async def main():
-    create_table()
-    add_new_columns()
-    initialize_admins(ADMIN_IDS)
+    try:
+        logger.info("Инициализация бота...")
+        create_table()
+        add_new_columns()
+        initialize_admins(ADMIN_IDS)
+        logger.info("База данных инициализирована")
+    except Exception as e:
+        logger.error(f"Ошибка инициализации базы данных: {e}")
+        raise
 
-    # Запускаем фоновую задачу для ежедневной выдачи риса
+    # Запускаем фоновые задачи
     asyncio.create_task(daily_rice_task())
 
+    # Импортируем функции для отчетов активности
+    from routers.activity_commands import daily_report_task, monthly_report_task
+    asyncio.create_task(daily_report_task(bot))
+    asyncio.create_task(monthly_report_task(bot))
+
     logger.info("Starting bot polling…")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
+        raise
 
 
 if __name__ == '__main__':

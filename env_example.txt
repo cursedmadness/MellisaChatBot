@@ -1,0 +1,8 @@
+# Пример файла переменных окружения .env
+# Скопируйте этот файл в .env и заполните своими значениями
+
+# Токен Telegram бота (обязательно)
+TOKEN=your_bot_token_here
+
+# Пример:
+# TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
