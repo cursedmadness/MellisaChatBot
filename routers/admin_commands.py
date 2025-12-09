@@ -14,9 +14,8 @@ from database import (
     unrate_user,
     add_user,
     delete_user_completely,
-    get_all_users,
     get_user_by_username,
-    update_user_username,
+    reset_all_rice_to_one,
 )
 
 ADMIN_IDS = [1534963580, 1103985703, 5806584445] # - ИД администраторов, у кого есть доступ к командам. Нужно будет настроить через бд.
@@ -410,3 +409,29 @@ async def delete_user_command(message: Message):
     else:
         logger.warning(f"Администратор {message.from_user.id} не смог удалить пользователя @{username} - пользователь не найден")
         await message.reply(f"❌ Пользователь @{username} не найден в базе данных.")
+
+
+@admin_router.message(F.text.lower().startswith("сбросить рис"))
+async def reset_rice_command(message: Message):
+    """
+    Команда для администраторов: сбрасывает количество риса у всех пользователей до 1 миски.
+    Формат: сбросить рис
+    """
+    if not is_admin(message.from_user.id):
+        await message.reply("❌ У вас нет прав для выполнения этой команды.")
+        return
+
+    logger.info(f"Администратор {message.from_user.id} начинает сброс риса всем пользователям")
+
+    await message.reply("🔄 Начинаю сброс количества риса до 1 миски у всех пользователей...")
+
+    reset_count = reset_all_rice_to_one()
+
+    logger.info(f"Администратор {message.from_user.id} сбросил рис {reset_count} пользователям")
+
+    await message.reply(
+        f"✅ Сброс риса завершен!\n\n"
+        f"📊 Результаты:\n"
+        f"• Обновлено пользователей: {reset_count}\n\n"
+        f"Теперь у каждого пользователя ровно 1 миска риса."
+    )

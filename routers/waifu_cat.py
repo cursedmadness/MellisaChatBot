@@ -15,6 +15,8 @@ from database import (
     update_cat_state,
     add_user,
     get_user_by_username,
+    get_user_rice_count,
+    upsert_hebao_item,
 )
 
 waifu_cat_router = Router()
@@ -81,7 +83,6 @@ def _format_waifu_profile(waifu: dict) -> str:
     raw_category = waifu.get("category_cats") or "students"
     date_cat = waifu.get("date_cat")
     satiety = waifu.get("satiety") or 0
-    miska_risa = waifu.get("miska_risa") or 0
     mood = waifu.get("mood") or "счастливый"
     age_days = waifu.get("age_days") or 1
 
@@ -134,7 +135,6 @@ def _format_waifu_profile(waifu: dict) -> str:
         f"С того дня мы с тобой {days_together} дней\n"
         f"Мой возраст: {age_days} дней\n\n"
         f"{hunger_line}\n"
-        f"У нас с тобой есть {format_miska(miska_risa)}\n"
         f"Моё настроение: {mood}\n"
         f"Если тебе интересно, что ещё можно со мной сделать — *ссылка на гайд*"
     )
@@ -423,7 +423,8 @@ async def feed_cat(message: Message):
     # Декремент сытости по времени перед кормлением
     _apply_satiety_decay(waifu)
 
-    bowls = waifu.get("miska_risa") or 0
+    # Проверяем количество риса в хэбао
+    bowls = get_user_rice_count(user_id)
     if bowls <= 0:
         await message.answer("У нас закончился рис. Нечем накормить кошку.")
         return
@@ -434,22 +435,22 @@ async def feed_cat(message: Message):
         return
 
     new_satiety = 100
-    bowls -= 1
     new_mood = _compute_mood(new_satiety)
     now_iso = datetime.utcnow().isoformat()
 
-    if update_cat_state(
+    # Обновляем состояние кошки
+    cat_updated = update_cat_state(
         user_id,
         satiety=new_satiety,
-        miska_risa=bowls,
         mood=new_mood,
         last_satiety_update=now_iso,
-    ):
-        waifu["satiety"] = new_satiety
-        waifu["miska_risa"] = bowls
-        waifu["mood"] = new_mood
-        waifu["last_satiety_update"] = now_iso
-        await message.answer(f"Кошка покормлена. Сытость: 100. Осталось мисок: {bowls}.")
+    )
+
+    # Уменьшаем количество риса в хэбао
+    rice_updated = upsert_hebao_item(user_id, "miska_risa", "миска риса", delta=-1)
+
+    if cat_updated and rice_updated:
+        await message.answer(f"Кошка покормлена. Сытость: 100. Осталось мисок: {bowls - 1}.")
     else:
         await message.answer("Не удалось накормить кошку. Попробуй ещё раз.")
 

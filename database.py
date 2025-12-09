@@ -57,6 +57,13 @@ def create_table():
                 )
             ''')
 
+            # Добавляем колонку для отслеживания последней ежедневной выдачи риса
+            try:
+                cursor.execute('ALTER TABLE hebao_items ADD COLUMN last_rice_given TEXT')
+            except sqlite3.OperationalError:
+                # Колонка уже существует
+                pass
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS chat_rules (
                     chat_id INTEGER PRIMARY KEY,
@@ -291,12 +298,11 @@ def _waifu_row_to_dict(row):
         "category_cats": safe(3),
         "date_cat": safe(4),
         "satiety": safe(5, 100),
-        "miska_risa": safe(6, 0),
-        "mood": safe(7, "отличное"),
-        "image_cats": safe(8),
-        "age_days": safe(9, 1),
-        "last_age_update": safe(10),
-        "last_satiety_update": safe(11),
+        "mood": safe(6, "отличное"),
+        "image_cats": safe(7),
+        "age_days": safe(8, 1),
+        "last_age_update": safe(9),
+        "last_satiety_update": safe(10),
     }
 
 
@@ -304,6 +310,7 @@ def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category: str 
     """
     Создаёт запись кошко-жены для пользователя, если её ещё нет.
     Поле date_cat сохраняем в ISO-формате.
+    Теперь выдает 1 миску риса при создании.
     """
     if category not in ("loli", "students", "MILF"):
         category = "students"
@@ -315,17 +322,30 @@ def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category: str 
     try:
         cursor = conn.cursor()
         now_iso = datetime.utcnow().isoformat()
+
+        # Проверяем, есть ли уже кошка
+        cursor.execute("SELECT user_id FROM waifu_cat WHERE user_id = ?", (user_id,))
+        existing_waifu = cursor.fetchone()
+
         cursor.execute(
             """
-            INSERT OR IGNORE INTO waifu_cat (user_id, cat_name, category_cats, date_cat, age_days, last_age_update, mood, satiety, miska_risa, last_satiety_update)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO waifu_cat (user_id, cat_name, category_cats, date_cat, age_days, last_age_update, mood, satiety, last_satiety_update)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, cat_name, category, now_iso, 1, now_iso, mood, 100, 5, now_iso),
+            (user_id, cat_name, category, now_iso, 1, now_iso, mood, 100, now_iso),
         )
+
+        created = cursor.rowcount > 0
+
+        # Если кошка создана впервые, убеждаемся что есть 1 миска риса
+        if created:
+            upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
+            logger.info(f"При создании кошки пользователю {user_id} выдана 1 миска риса")
+
         conn.commit()
-        return cursor.rowcount > 0
+        return created
     except Error as e:
-        print(e)
+        logger.error(f"Ошибка при создании кошки для user_id {user_id}: {e}")
         return False
     finally:
         conn.close()
@@ -341,7 +361,7 @@ def get_waifu_by_user(user_id: int):
         cursor.execute(
             """
             SELECT cats_id, user_id, cat_name, category_cats, date_cat,
-                   satiety, miska_risa, mood, image_cats, age_days, last_age_update, last_satiety_update
+                   satiety, mood, image_cats, age_days, last_age_update, last_satiety_update
             FROM waifu_cat WHERE user_id = ?
             """,
             (user_id,),
@@ -395,11 +415,12 @@ def update_cat_image(user_id: int, image_path: str) -> bool:
         conn.close()
 
 
-def update_cat_state(user_id: int, *, satiety: int | None = None, miska_risa: int | None = None,
+def update_cat_state(user_id: int, *, satiety: int | None = None,
                     mood: str | None = None, last_satiety_update: str | None = None) -> bool:
     """
     Универсальное обновление динамических полей кошко-жены.
     Обновляет только переданные параметры.
+    Примечание: miska_risa больше не используется, рис хранится в hebao_items.
     """
     conn = create_connection()
     if not conn:
@@ -410,9 +431,6 @@ def update_cat_state(user_id: int, *, satiety: int | None = None, miska_risa: in
     if satiety is not None:
         fields.append("satiety = ?")
         values.append(satiety)
-    if miska_risa is not None:
-        fields.append("miska_risa = ?")
-        values.append(miska_risa)
     if mood is not None:
         fields.append("mood = ?")
         values.append(mood)
@@ -434,7 +452,7 @@ def update_cat_state(user_id: int, *, satiety: int | None = None, miska_risa: in
         conn.commit()
         return cursor.rowcount > 0
     except Error as e:
-        print(e)
+        logger.error(f"Ошибка обновления состояния кошки для user_id {user_id}: {e}")
         return False
     finally:
         conn.close()
@@ -468,11 +486,17 @@ def add_user(user_id: int, nickname: str, username: str | None = None):
     """
     Добавляет пользователя в БД с указанным ником и username.
     При повторном добавлении обновляет username.
+    Также выдает 1 миску риса новым пользователям.
     """
     conn = create_connection()
     if conn:
         try:
             cursor = conn.cursor()
+
+            # Проверяем, новый ли пользователь
+            cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+            existing_user = cursor.fetchone()
+
             cursor.execute(
                 """
                 INSERT INTO users (user_id, nickname, username)
@@ -482,10 +506,16 @@ def add_user(user_id: int, nickname: str, username: str | None = None):
                 """,
                 (user_id, nickname, username),
             )
+
+            # Если пользователь новый, выдаем 1 миску риса
+            if not existing_user:
+                upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
+                logger.info(f"Новому пользователю {user_id} (@{username or 'нет'}) выдана 1 миска риса")
+
             conn.commit()
         except Error as e:
-            print(e)
-        finally:    
+            logger.error(f"Ошибка при добавлении пользователя {user_id}: {e}")
+        finally:
             conn.close()
 
 def get_user_nickname(user_id: int) -> str:
@@ -757,6 +787,156 @@ def get_chat_rules_info(chat_id: int) -> dict | None:
     except Error as e:
         print(f"Ошибка при получении информации о правилах чата {chat_id}: {e}")
         return None
+    finally:
+        conn.close()
+
+
+# --- Функции для ежедневной выдачи риса ---
+
+def get_user_rice_count(user_id: int) -> int:
+    """
+    Получает количество мисок риса у пользователя.
+    Возвращает 0 если риса нет.
+    """
+    conn = create_connection()
+    if not conn:
+        return 0
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT quantity FROM hebao_items WHERE user_id = ? AND item_key = 'miska_risa'",
+            (user_id,)
+        )
+        result = cursor.fetchone()
+        return result[0] if result else 0
+
+    except Error as e:
+        logger.error(f"Ошибка при получении количества риса для user_id {user_id}: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def give_daily_rice(user_id: int) -> bool:
+    """
+    Выдает 1 миску риса пользователю, если у него меньше 6 мисок.
+    Обновляет время последней выдачи.
+    Возвращает True если рис был выдан.
+    """
+    rice_count = get_user_rice_count(user_id)
+
+    if rice_count >= 6:
+        logger.info(f"Пользователь {user_id} имеет {rice_count} мисок риса (>=6), ежедневная выдача пропущена")
+        return False
+
+    # Выдаем 1 миску риса
+    success = upsert_hebao_item(user_id, "miska_risa", "миска риса", delta=1)
+
+    if success:
+        # Обновляем время последней выдачи
+        conn = create_connection()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                now_iso = datetime.utcnow().isoformat()
+                cursor.execute(
+                    "UPDATE hebao_items SET last_rice_given = ? WHERE user_id = ? AND item_key = 'miska_risa'",
+                    (now_iso, user_id)
+                )
+                conn.commit()
+                logger.info(f"Пользователю {user_id} выдана 1 миска риса (было {rice_count}, стало {rice_count + 1})")
+            except Error as e:
+                logger.error(f"Ошибка обновления last_rice_given для user_id {user_id}: {e}")
+            finally:
+                conn.close()
+
+        return True
+
+    return False
+
+
+def reset_all_rice_to_one() -> int:
+    """
+    Обнуляет количество риса у всех пользователей до 1 миски.
+    Возвращает количество обновленных пользователей.
+    """
+    conn = create_connection()
+    if not conn:
+        logger.error("Не удалось подключиться к БД для сброса риса")
+        return 0
+
+    try:
+        cursor = conn.cursor()
+
+        # Получаем всех пользователей с рисом
+        cursor.execute("SELECT user_id, quantity FROM hebao_items WHERE item_key = 'miska_risa' AND quantity > 1")
+        users_with_rice = cursor.fetchall()
+
+        updated_count = 0
+        for user_id, current_quantity in users_with_rice:
+            # Обновляем до 1 миски
+            cursor.execute(
+                "UPDATE hebao_items SET quantity = 1, updated_at = ? WHERE user_id = ? AND item_key = 'miska_risa'",
+                (datetime.utcnow().isoformat(), user_id)
+            )
+            if cursor.rowcount > 0:
+                updated_count += 1
+                logger.info(f"Пользователь {user_id}: рис сброшен с {current_quantity} до 1 миски")
+
+        # Добавляем 1 миску риса пользователям, у которых ее нет вообще
+        cursor.execute("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM hebao_items WHERE item_key = 'miska_risa')")
+        users_without_rice = cursor.fetchall()
+
+        for (user_id,) in users_without_rice:
+            upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
+            updated_count += 1
+            logger.info(f"Пользователь {user_id}: добавлена 1 миска риса")
+
+        conn.commit()
+        logger.info(f"Сброс риса завершен. Обновлено {updated_count} пользователей")
+
+        return updated_count
+
+    except Error as e:
+        logger.error(f"Ошибка при сбросе риса: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def process_daily_rice_distribution() -> int:
+    """
+    Обрабатывает ежедневную выдачу риса всем пользователям.
+    Вызывается раз в сутки.
+    Возвращает количество пользователей, которым был выдан рис.
+    """
+    logger.info("Начинается ежедневная выдача риса")
+
+    conn = create_connection()
+    if not conn:
+        logger.error("Не удалось подключиться к БД для ежедневной выдачи риса")
+        return 0
+
+    try:
+        cursor = conn.cursor()
+
+        # Получаем всех пользователей
+        cursor.execute("SELECT user_id FROM users")
+        all_users = cursor.fetchall()
+
+        distributed_count = 0
+
+        for (user_id,) in all_users:
+            if give_daily_rice(user_id):
+                distributed_count += 1
+
+        logger.info(f"Ежедневная выдача риса завершена. Выдано {distributed_count} пользователям")
+        return distributed_count
+
+    except Error as e:
+        logger.error(f"Ошибка при ежедневной выдаче риса: {e}")
+        return 0
     finally:
         conn.close()
 

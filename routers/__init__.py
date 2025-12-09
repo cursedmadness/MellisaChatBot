@@ -6,7 +6,6 @@ from .waifu_cat import waifu_cat_router
 from .hebao import hebao_router
 from .rules import rules_router
 from aiogram import Router
-from aiogram.types import Message
 
 main_router = Router() # подключение роутеров
 
