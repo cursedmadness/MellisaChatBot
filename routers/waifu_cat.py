@@ -1,7 +1,7 @@
 from aiogram import Router, F
 from aiogram.filters.command import Command, CommandObject
 from aiogram.types import Message, FSInputFile
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import random
 import logging
@@ -17,8 +17,13 @@ from database import (
     get_user_by_username,
     get_user_rice_count,
     upsert_hebao_item,
+    get_user_rate,
+    get_all_waifus_with_owners,
+    clear_all_waifus,
+    is_admin,
+    delete_waifu_by_user,
 )
-from routers.utils import extract_user_from_text, resolve_user_id
+from routers.utils import extract_user_from_text, resolve_user_id, get_user_link
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +45,9 @@ def _format_waifu_profile(waifu: dict) -> str:
     # Пытаемся посчитать, сколько времени прошло
     try:
         start_dt = datetime.fromisoformat(date_cat) if date_cat else None
-        days_together = (datetime.utcnow() - start_dt).days if start_dt else "?"
+        if start_dt and start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=timezone.utc)
+        days_together = (datetime.now(timezone.utc) - start_dt).days if start_dt else "?"
     except Exception:
         days_together = "?"
 
@@ -68,10 +75,12 @@ def _format_waifu_profile(waifu: dict) -> str:
         return f"{n} {word} риса"
 
     def display_category(category: str, age: int) -> str:
-        # Пока для "students" выводим "котёнок". Позже можно развить по возрасту.
-        if category == "students":
+        if age <= 30:
             return "котёнок"
-        return category
+        elif age <= 120:
+            return "кошка-студентка"
+        else:
+            return "милфа-кошка"
 
     hunger_line = (
         "Сейчас я не хочу есть" # высокая сытость
@@ -87,7 +96,7 @@ def _format_waifu_profile(waifu: dict) -> str:
         f"Мой возраст: {age_days} дней\n\n"
         f"{hunger_line}\n"
         f"Моё настроение: {mood}\n"
-        f"Если тебе интересно, что ещё можно со мной сделать — *ссылка на гайд*"
+        f"Если тебе интересно, что ещё можно со мной сделать — <i>ссылка на гайд</i>"
     )
 
 
@@ -126,13 +135,15 @@ async def _apply_satiety_decay(waifu: dict) -> bool:
     last_update_str = waifu.get("last_satiety_update")
     try:
         last_dt = datetime.fromisoformat(last_update_str) if last_update_str else None
+        if last_dt and last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
     except Exception:
         last_dt = None
 
     if not last_dt:
         return False
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     hours = (now - last_dt).total_seconds() // 3600
     steps = int(hours // 5)  # каждые 5 часов минус 10
     if steps <= 0:
@@ -152,16 +163,88 @@ async def _apply_satiety_decay(waifu: dict) -> bool:
     return True
 
 
-@waifu_cat_router.message(Command("catch_cat"))
-@waifu_cat_router.message(F.text.func(lambda t: _norm(t).startswith("поймать котенка")))
-async def catch_cat(message: Message):
-    """Создаёт кошко-жену для пользователя, если её ещё нет."""
+@waifu_cat_router.message(Command("abandon_waifu"))
+@waifu_cat_router.message(F.text.lower() == "отказаться от жены")
+async def abandon_waifu_request(message: Message):
+    """Инициирует процесс отказа от кошко-жены."""
     user_id = message.from_user.id
-    created = await create_waifu_for_user(user_id)
-    if created:
-        await message.answer("Ты подобрал котёнка! Теперь у тебя есть Кошкожена.")
+    waifu = await get_waifu_by_user(user_id)
+    
+    if not waifu:
+        await message.answer("У вас нет кошко-жены, от которой можно было бы отказаться.")
+        return
+
+    await message.reply(
+        "⚠️ <b>ПРЕДУПРЕЖДЕНИЕ</b>\n\n"
+        "Вы собираетесь отказаться от своей кошко-жены. Это действие необратимо и она навсегда покинет вас.\n\n"
+        "Если вы уверены в своем решении, <b>ответьте на это сообщение</b> текстом:\n"
+        "<code>точно отказываюсь</code>"
+    )
+
+
+@waifu_cat_router.message(F.reply_to_message & F.text.lower() == "точно отказываюсь")
+async def abandon_waifu_confirm(message: Message):
+    """Подтверждение отказа от кошко-жены через reply."""
+    user_id = message.from_user.id
+    
+    # Проверяем, что это ответ именно на сообщение бота (опционально, но желательно)
+    if not message.reply_to_message.from_user.is_bot:
+        return
+
+    # Проверяем, что в сообщении бота было слово "отказаться" (чтобы не сработало на любой реплай)
+    if "отказаться" not in message.reply_to_message.text.lower():
+        return
+
+    deleted = await delete_waifu_by_user(user_id)
+    if deleted:
+        await message.answer(
+            "💔 Ваша кошко-жена грустно мяукнула на прощание и ушла... Теперь вы снова один."
+        )
     else:
-        await message.answer("У тебя уже есть Кошкожена. Загляни к ней!")
+        await message.answer("Техническая ошибка: не удалось удалить запись. Возможно, у вас уже нет жены.")
+
+
+@waifu_cat_router.message(Command("all_waifus"))
+@waifu_cat_router.message(F.text.lower() == "список жен")
+async def show_all_waifus_command(message: Message):
+    """Выводит список всех жен (только для админов)."""
+    if not await is_admin(message.from_user.id):
+        return
+
+    waifus = await get_all_waifus_with_owners()
+    if not waifus:
+        await message.answer("В базе данных пока нет ни одной кошко-жены.")
+        return
+
+    text = "📂 <b>Список всех кошко-жен в системе:</b>\n\n"
+    for w in waifus:
+        # Пытаемся получить имя или ссылку
+        owner_name = w["nickname"] or w["username"] or str(w["user_id"])
+        owner_link = get_user_link(w["user_id"], owner_name)
+        
+        # Определяем статус по возрасту
+        age = w["age_days"]
+        if age <= 30:
+            status = "котенок"
+        elif age <= 120:
+            status = "кошка-студентка"
+        else:
+            status = "милфа-кошка"
+            
+        text += f"• {owner_link} — {w['cat_name']} — {age} дн. ({status})\n"
+
+    await message.answer(text)
+
+
+@waifu_cat_router.message(Command("clear_waifus"))
+@waifu_cat_router.message(F.text.lower() == "сброс жен")
+async def clear_waifus_command(message: Message):
+    """Полностью очищает базу жен (только для админов)."""
+    if not await is_admin(message.from_user.id):
+        return
+
+    count = await clear_all_waifus()
+    await message.answer(f"✅ База данных очищена. Удалено {count} записей о женах.")
 
 
 @waifu_cat_router.message(Command("my_cat"))
@@ -175,7 +258,10 @@ async def show_my_cat(message: Message):
 
     waifu = await get_waifu_by_user(target_id)
     if not waifu:
-        await message.answer("Сначала поймай котёнка: напиши «Поймать котёнка».")
+        await message.answer(
+            "Мяу! У тебя пока нет кошко-жены. 😿\n\n"
+            "Она появится автоматически, когда твой рейтинг социального кредита достигнет <b>500</b>!"
+        )
         return
 
     # Декремент сытости по времени
@@ -192,10 +278,12 @@ async def show_my_cat(message: Message):
             is_member = False
 
     if is_member:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         last_update_str = waifu.get("last_age_update")
         try:
             last_dt = datetime.fromisoformat(last_update_str) if last_update_str else None
+            if last_dt and last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
         except Exception:
             last_dt = None
         delta_days = (now - last_dt).days if last_dt else 0
@@ -217,9 +305,9 @@ async def show_my_cat(message: Message):
 
     if image_path and os.path.isfile(image_path):
         photo = FSInputFile(image_path)
-        await message.answer_photo(photo, caption=caption, parse_mode="Markdown")
+        await message.answer_photo(photo, caption=caption)
     else:
-        await message.answer(caption, parse_mode="Markdown")
+        await message.answer(caption)
 
 
 @waifu_cat_router.message(F.text.lower().func(lambda t: t.startswith("кошка ") and ("@" in t or "https://" in t)))
@@ -266,10 +354,12 @@ async def show_user_cat(message: Message, command: CommandObject = None):
             is_member = False
 
     if is_member:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         last_update_str = waifu.get("last_age_update")
         try:
             last_dt = datetime.fromisoformat(last_update_str) if last_update_str else None
+            if last_dt and last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
         except Exception:
             last_dt = None
         delta_days = (now - last_dt).days if last_dt else 0
@@ -287,7 +377,7 @@ async def show_user_cat(message: Message, command: CommandObject = None):
             waifu["image_cats"] = image_path
 
     caption = _format_waifu_profile(waifu)
-    owner_ref = f"<a href='tg://user?id={target_id}'>гражданин</a>"
+    owner_ref = get_user_link(target_id, "гражданин")
     caption = f"Кошка {owner_ref}\n\n" + caption
 
     if image_path and os.path.isfile(image_path):
@@ -357,7 +447,7 @@ async def feed_cat(message: Message):
 
     new_satiety = 100
     new_mood = _compute_mood(new_satiety)
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     # Обновляем состояние кошки
     cat_updated = await update_cat_state(
