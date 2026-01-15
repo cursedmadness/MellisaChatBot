@@ -4,7 +4,13 @@ from aiogram.types import Message
 from aiogram import Bot
 # from aiogram.enums import ChatType
 # from aiogram.exceptions import TelegramBadRequest
-from database import increment_user_activity, get_chat_leaderboard, get_daily_top, get_monthly_top, reset_daily_activity
+from database import (
+    increment_user_activity, get_chat_leaderboard, get_daily_top, 
+    get_monthly_top, reset_daily_activity, get_highly_active_users,
+    get_user_rate, update_user_rate
+)
+from routers.utils import get_user_link
+import random
 import asyncio
 import logging
 from datetime import datetime, time, timedelta
@@ -56,6 +62,29 @@ async def publish_daily_report(bot: Bot):
             error_count += 1
 
     logger.info(f"Ежедневная ведомость отправлена в {success_count} чатов, ошибок: {error_count}")
+
+    # Начисляем бонусы за активность > 150
+    active_users = await get_highly_active_users(150)
+    for u_id, u_nick, u_act in active_users:
+        current_rate = await get_user_rate(u_id) or 0
+        new_rate = current_rate + 10
+        cat_created = await update_user_rate(u_id, new_rate)
+        
+        user_link = get_user_link(u_id, u_nick)
+        bonus_msg = (
+            f"🌟 Партия гордится гражданином {user_link} и дарит ему повышение рейтинга на 10 за высокую дневную активность ({u_act} сообщ.)!\n"
+            f"Теперь его рейтинг составляет <b>{new_rate}</b>."
+        )
+        
+        if cat_created:
+            bonus_msg += "\n\n🎊 <b>Партия гордится вами! За ваши заслуги вам выдан котёнок!</b>"
+        
+        # Отправляем во все чаты (или только в те, где включена стата?)
+        for chat_id in STATS_ENABLED_CHATS:
+            try:
+                await bot.send_message(chat_id=chat_id, text=bonus_msg)
+            except Exception:
+                pass
 
     # Сбрасываем ежедневную активность
     await reset_daily_activity()
@@ -176,12 +205,12 @@ async def show_stats_handler(message: Message):
         return
 
     # 3. Формируем красивый ответ
-    response_text = "✍️ Сводка народной активности*\n\n"
+    response_text = "✍️ <b>Сводка народной активности</b>\n\n"
     
     for i, (nickname, activity) in enumerate(leaderboard, 1):
         response_text += f"{i}. {nickname} - {activity} сообщений\n"
         
-    await message.answer(response_text, parse_mode="Markdown")
+    await message.answer(response_text)
 
 # Роутер собирающий статистику
 @activity_routers.message(F.text & ~F.text.startswith("/"))
@@ -194,4 +223,18 @@ async def count_messages(message: Message):
     user_id = message.from_user.id
     if not await increment_user_activity(user_id):
         logger.error(f"Не удалось увеличить активность пользователя {user_id}")
+    
+    # 3. Случайные поощрения от Партии
+    # Например, с шансом 1% при каждом сообщении
+    if random.random() < 0.01:
+        pride_messages = [
+            "Партия гордится тобой, {link}!",
+            "Твой вклад в общение неоценим, {link}. Партия ценит это!",
+            "Продолжай в том же духе, {link}! Социальный кредит растет в наших сердцах.",
+            "Гражданин {link}, ваше усердие замечено высшим руководством!",
+            "Партия видит твой труд, {link}. Так держать!"
+        ]
+        user_link = get_user_link(user_id, message.from_user.first_name)
+        text = random.choice(pride_messages).format(link=user_link)
+        await message.answer(text)
     # Никакого ответа в чат не посылаем, чтобы не спамить

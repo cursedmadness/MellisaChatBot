@@ -29,7 +29,7 @@ async def start_handler(message: Message):
         await add_user(user_id, first_name, message.from_user.username)
         await message.answer(f" 🌸 Добро пожаловать, {first_name}. Ваш профиль загружен в систему. Партия гордится Вами!\n"
                             f"Чтобы узнать больше о нас, можете перейти по этим ссылкам:\n"
-                            f"*ссылки*")
+                            f"<i>ссылки</i>")
 
 # Роутер на смену ника в анкете
 
@@ -90,7 +90,7 @@ async def profile_handler(message: Message):
     # Просто вызываем нашу универсальную функцию для получения текста
     profile_text = await get_profile_text(user_id)
     
-    await message.answer(profile_text, parse_mode="Markdown")
+    await message.answer(profile_text)
 
 # Роутер удаляет ник
 @user_router.message(Command('delete_nickname'))
@@ -103,7 +103,7 @@ async def reset_nickname_handler(message: Message):
     first_name = message.from_user.first_name or "гражданин"
     
     await set_user_nickname(user_id, first_name)
-    await message.answer(f"🗑️ Ваше имя успешно отправлено в ссылку.", parse_mode="Markdown")
+    await message.answer(f"🗑️ Ваше имя успешно отправлено в ссылку.")
 
 # Роутер удаляет описание
 @user_router.message(Command('delete_description'))
@@ -123,7 +123,7 @@ async def show_my_nickname(message: Message):
     nickname = await get_user_nickname(user_id)
     
     if nickname:
-        await message.answer(f"📝 Твой текущий ник: **{nickname}**", parse_mode="Markdown")
+        await message.answer(f"📝 Твой текущий ник: <b>{nickname}</b>")
     else:
         await message.answer("Я тебя ещё не знаю. Напиши /start для регистрации.")
 
@@ -135,9 +135,9 @@ async def show_my_description(message: Message):
     description = await get_user_description(user_id)
     
     if description:
-        await message.answer(f"📄 Твоё описание:\n_{description}_", parse_mode="Markdown")
+        await message.answer(f"📄 Твоё описание:\n<i>{description}</i>")
     else:
-        await message.answer("У тебя пока нет описания. Можешь добавить его командой `/set_description`.", parse_mode="Markdown")
+        await message.answer("У тебя пока нет описания. Можешь добавить его командой <code>/set_description</code>.")
 
 # Роутер выводит рейтинг гражданина
 @user_router.message(Command('my_rate'))
