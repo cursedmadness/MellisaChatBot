@@ -24,7 +24,7 @@ async def publish_daily_report(bot: Bot):
     """Публикует ежедневную ведомость активности во все включенные чаты."""
     logger.info("Начинаем публикацию ежедневной ведомости")
 
-    daily_top = get_daily_top(DAILY_TOP_LIMIT)
+    daily_top = await get_daily_top(DAILY_TOP_LIMIT)
 
     if not daily_top:
         logger.info("Нет данных для ежедневной ведомости")
@@ -58,14 +58,14 @@ async def publish_daily_report(bot: Bot):
     logger.info(f"Ежедневная ведомость отправлена в {success_count} чатов, ошибок: {error_count}")
 
     # Сбрасываем ежедневную активность
-    reset_daily_activity()
+    await reset_daily_activity()
 
 
 async def publish_monthly_report(bot: Bot):
     """Публикует ежемесячную ведомость активности во все включенные чаты."""
     logger.info("Начинаем публикацию ежемесячной ведомости")
 
-    monthly_top = get_monthly_top(MONTHLY_TOP_LIMIT)
+    monthly_top = await get_monthly_top(MONTHLY_TOP_LIMIT)
 
     if not monthly_top:
         logger.info("Нет данных для ежемесячной ведомости")
@@ -169,7 +169,7 @@ async def show_stats_handler(message: Message):
         return
 
     # 2. Получаем данные из БД
-    leaderboard = get_chat_leaderboard(STATS_LEADERBOARD_LIMIT)
+    leaderboard = await get_chat_leaderboard(STATS_LEADERBOARD_LIMIT)
 
     if not leaderboard:
         await message.answer("Пока нечего показывать. Статистика пуста.")
@@ -192,6 +192,6 @@ async def count_messages(message: Message):
 
     # 2. Если чат в списке, увеличиваем счетчик
     user_id = message.from_user.id
-    if not increment_user_activity(user_id):
+    if not await increment_user_activity(user_id):
         logger.error(f"Не удалось увеличить активность пользователя {user_id}")
     # Никакого ответа в чат не посылаем, чтобы не спамить

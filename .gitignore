@@ -4,3 +4,19 @@ __pycache__/
 *.pyo
 *.pyd
 *.pytest_cache/
+
+# Files containing sensitive info
+.env
+*.session
+*.session-journal
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+*.log
+
+# OS-generated files
+.DS_Store
+Thumbs.db
