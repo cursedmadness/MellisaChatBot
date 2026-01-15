@@ -29,7 +29,9 @@ STATS_ENABLED_CHATS: Set[int] = {
 }  # ID чатов для сбора статистики активности
 
 # Настройки администраторов
-ADMIN_IDS = [1534963580, 1103985703, 5806584445]  # ID администраторов
+# Настройки администраторов. Загружаются из переменной ADMIN_IDS (через запятую)
+_admin_ids_str = os.getenv('ADMIN_IDS', '')
+ADMIN_IDS = [int(i.strip()) for i in _admin_ids_str.split(',') if i.strip().isdigit()]
 
 # Настройки базы данных
 DB_NAME = "users.db"  # Имя файла базы данных

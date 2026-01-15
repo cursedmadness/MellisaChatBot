@@ -17,20 +17,16 @@ def main():
 
     # Проверка переменных окружения
     print("\n📋 Переменные окружения:")
-    token_ok = bool(os.getenv('TOKEN'))
-    api_id_ok = bool(os.getenv('API_ID'))
-    api_hash_ok = bool(os.getenv('API_HASH'))
+    token_ok = bool(os.getenv('BOT_TOKEN') or os.getenv('TOKEN'))
 
-    print(f"  TOKEN (бот):     {'✅' if token_ok else '❌'}")
-    print(f"  API_ID (pyrogram): {'✅' if api_id_ok else '❌'}")
-    print(f"  API_HASH (pyrogram): {'✅' if api_hash_ok else '❌'}")
+    print(f"  BOT_TOKEN (бот):   {'✅' if token_ok else '❌'}")
 
     # Проверка импортов
     print("\n📦 Проверка модулей:")
     modules_ok = True
 
     try:
-        from config import BOT_TOKEN, API_ID, API_HASH
+        from config import BOT_TOKEN
         print("  config.py:        ✅")
     except Exception as e:
         print(f"  config.py:        ❌ ({e})")
@@ -44,9 +40,8 @@ def main():
         modules_ok = False
 
     try:
-        from routers.moderation_commands import moderation_app
+        from routers.moderation_commands import moderation_router
         print("  moderation_commands.py: ✅")
-        print(f"  pyrogram client:  {'✅' if moderation_app else '❌'}")
     except Exception as e:
         print(f"  moderation_commands.py: ❌ ({e})")
         modules_ok = False
@@ -67,36 +62,18 @@ def main():
         print("  aiogram:          ❌ (pip install aiogram)")
 
     try:
-        import pyrogram
-        print("  pyrogram:         ✅")
+        import aiosqlite
+        print("  aiosqlite:        ✅")
     except ImportError:
-        print("  pyrogram:         ❌ (pip install pyrogram)")
-
-    try:
-        import TgCrypto
-        print("  TgCrypto:         ✅")
-    except ImportError:
-        print("  TgCrypto:         ❌ (pip install TgCrypto)")
+        print("  aiosqlite:        ❌ (pip install aiosqlite)")
 
     # Итоговые рекомендации
     print("\n🎯 Статус и рекомендации:")
     print("-" * 30)
 
     if not token_ok:
-        print("❌ TOKEN не настроен! Добавьте в .env файл:")
-        print("   TOKEN=ваш_токен_бота")
-        print()
-
-    if not api_id_ok or not api_hash_ok:
-        print("⚠️  API_ID и API_HASH не настроены!")
-        print("   Команды модерации (/бан, /мут, /варн) будут недоступны")
-        print("   Инструкция по получению:")
-        print("   1. Перейдите на https://my.telegram.org/")
-        print("   2. Авторизуйтесь")
-        print("   3. Создайте приложение")
-        print("   4. Добавьте в .env:")
-        print("      API_ID=ваш_api_id")
-        print("      API_HASH=ваш_api_hash")
+        print("❌ BOT_TOKEN не настроен! Добавьте в .env файл:")
+        print("   BOT_TOKEN=ваш_токен_бота")
         print()
 
     if modules_ok and token_ok:
