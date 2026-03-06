@@ -12,16 +12,23 @@ from database import (
     initialize_admins, 
     process_daily_rice_distribution, 
     initialize_default_ratings,
-    get_all_waifus_with_owners
+    get_all_waifus_with_owners,
+    get_user_city,
+    init_db,
+    close_db
 )
 from routers.moderation_commands import cleanup_expired_punishments_task
 from routers.activity_commands import daily_report_task, monthly_report_task
+from routers.weather_service import get_weather_string
+from routers.strings import MORNING_PHRASES, NIGHT_PHRASES, HUNGER_PHRASES
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from config import (
     BOT_TOKEN, PARSE_MODE, LINK_PREVIEW_DISABLED, LOG_LEVEL, LOG_FORMAT,
     DAILY_RICE_TIME_HOUR, ADMIN_IDS
 )
+import random
+
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -96,29 +103,79 @@ async def waifu_greetings_task(bot: Bot):
             logger.info(f"Следующее приветствие кошек через {wait_seconds:.1f} сек.")
             await asyncio.sleep(wait_seconds)
             
-            # Проверям, какое это время (утро или ночь) в UTC
+            # Проверяем, какое это время (утро или ночь) в UTC
             # 6 UTC -> Утро МСК, 20 UTC -> Ночь МСК
             is_morning = target_run.hour == 6
-            message_text = "Доброе утро, хозяин! 🌸" if is_morning else "Доброй ночи, хозяин... ✨"
-            
-            logger.info(f"Рассылка приветствия: {message_text}")
+
+            # Генерируем сообщения для каждого владельца
+            logger.info(f"Начинается рассылка приветствий ({'утро' if is_morning else 'ночь'})")
             waifus = await get_all_waifus_with_owners()
+            
             for w in waifus:
                 try:
+                    user_id = w["user_id"]
+                    cat_name = w["cat_name"] or "кошко-жена"
+                    
+                    # Выбираем рандомную фразу
+                    if is_morning:
+                        base_text = random.choice(MORNING_PHRASES)
+                    else:
+                        base_text = random.choice(NIGHT_PHRASES)
+                    
+                    # Подставляем имя кошки
+                    final_text = base_text.format(cat_name=cat_name)
+                    
+                    # Добавляем погоду утром
+                    if is_morning:
+                        city = await get_user_city(user_id)
+                        if city:
+                            weather_info = await get_weather_string(city)
+                            if weather_info:
+                                final_text += f"\n\n{weather_info}"
+
                     # Отправляем сообщение владельцу
-                    await bot.send_message(w["user_id"], message_text)
+                    await bot.send_message(user_id, final_text)
                     await asyncio.sleep(0.05) # Задержка для соблюдения лимитов
                 except Exception as send_err:
-                    # Часто бывает, что бот заблокирован пользователем
-                    logger.debug(f"Не удалось отправить приветствие пользователю {w['user_id']}: {send_err}")
+                    logger.debug(f"Не удалось отправить приветствие пользователю {user_id}: {send_err}")
             
         except Exception as e:
             logger.error(f"Ошибка в задаче приветствий кошек: {e}")
             await asyncio.sleep(60)
 
+
+async def waifu_hunger_notifier_task(bot: Bot):
+    """Фоновая задача для уведомления владельцев, чьи кошки голодны."""
+    while True:
+        try:
+            # Проверка каждые 4 часа
+            await asyncio.sleep(4 * 3600)
+            
+            waifus = await get_all_waifus_with_owners()
+            for w in waifus:
+                user_id = w["user_id"]
+                cat_name = w["cat_name"] or "кошко-жена"
+                
+                # Применяем декремент сытости по времени
+                from routers.waifu_cat import _apply_satiety_decay
+                await _apply_satiety_decay(w)
+                
+                if (w.get("satiety") or 0) < 30:
+                    try:
+                        mention = f"<a href='tg://user?id={user_id}'>хозяин</a>"
+                        phrase = random.choice(HUNGER_PHRASES).format(mention=mention, cat_name=cat_name)
+                        await bot.send_message(user_id, phrase)
+                        await asyncio.sleep(0.05)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"Ошибка в задаче уведомлений о голоде: {e}")
+            await asyncio.sleep(60)
+
 async def main():
     try:
         logger.info("Инициализация базы данных...")
+        await init_db()
         await create_table()
         await add_new_columns()
         await initialize_admins(ADMIN_IDS)
@@ -138,7 +195,8 @@ async def main():
         asyncio.create_task(cleanup_expired_punishments_task(bot)),
         asyncio.create_task(daily_report_task(bot)),
         asyncio.create_task(monthly_report_task(bot)),
-        asyncio.create_task(waifu_greetings_task(bot))
+        asyncio.create_task(waifu_greetings_task(bot)),
+        asyncio.create_task(waifu_hunger_notifier_task(bot))
     ]
 
     logger.info("Запуск бота MellisaChatBot...")
@@ -163,6 +221,7 @@ async def main():
         # Отменяем фоновые задачи при выходе
         for task in tasks:
             task.cancel()
+        await close_db()
         await bot.session.close()
 
 if __name__ == '__main__':

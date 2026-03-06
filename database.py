@@ -9,29 +9,71 @@ logger = logging.getLogger(__name__)
 
 DB_NAME = "users.db"  # Имя файла БД
 
+_db = None
+
+async def init_db() -> aiosqlite.Connection:
+    """Инициализирует глобальное соединение с БД."""
+    global _db
+    if _db is None:
+        try:
+            _db = await aiosqlite.connect(DB_NAME)
+            _db.row_factory = aiosqlite.Row
+            await _db.execute("PRAGMA foreign_keys = ON")
+            await _db.execute("PRAGMA journal_mode = WAL")
+            logger.info(f"Глобальное соединение с БД {DB_NAME} установлено (WAL mode: ON).")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации БД: {e}")
+            raise
+    return _db
+
+async def close_db() -> None:
+    """Закрывает глобальное соединение с БД."""
+    global _db
+    if _db is not None:
+        await _db.close()
+        _db = None
+        logger.info("Глобальное соединение с БД закрыто.")
+
 class AsyncSQLiteContext:
      def __init__(self, db):
          self.db = db
 
      async def __aenter__(self):
-         if self.db:
-             await self.db.execute("PRAGMA foreign_keys = ON")
          return self.db
 
      async def __aexit__(self, exc_type, exc_val, exc_tb):
-         if self.db:
-             await self.db.close()
+         # Мы не закрываем глобальное соединение здесь.
+         pass
 
-async def create_connection():
-     """Создаёт асинхронное соединение с БД и возвращает контекстный менеджер."""
-     try:
-         db = await aiosqlite.connect(DB_NAME)
-         return AsyncSQLiteContext(db)
-     except Exception as e:
-         logger.error(f"Ошибка подключения к БД {DB_NAME}: {e}")
-         return AsyncSQLiteContext(None)
+async def create_connection() -> AsyncSQLiteContext:
+     """Возвращает контекстный менеджер для работы с глобальным соединением."""
+     if _db is None:
+         await init_db()
+     return AsyncSQLiteContext(_db)
 
-async def create_table():
+async def _generic_update(table: str, where_col: str, where_val: any, **fields) -> bool:
+    """Универсальная функция для обновления полей в любой таблице."""
+    if not fields:
+        return False
+    
+    async with await create_connection() as conn:
+        if not conn:
+            return False
+            
+        set_clause = ", ".join([f"{k} = ?" for k in fields.keys()])
+        values = list(fields.values())
+        values.append(where_val)
+        
+        try:
+            cursor = await conn.cursor()
+            await cursor.execute(f"UPDATE {table} SET {set_clause} WHERE {where_col} = ?", tuple(values))
+            await conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении таблицы {table} [{where_col}={where_val}]: {e}")
+            return False
+
+async def create_table() -> None:
     """Создаёт таблицу users и admins и waifu_cats, если её нет."""
     async with await create_connection() as conn:
         if conn:
@@ -60,6 +102,17 @@ async def create_table():
                 )''')
 
                 await cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS marriages (
+                        marriage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER UNIQUE NOT NULL,
+                        cat_id INTEGER NOT NULL,
+                        marriage_date TEXT,
+                        FOREIGN KEY (user_id) REFERENCES users(user_id),
+                        FOREIGN KEY (cat_id) REFERENCES waifu_cat(cats_id)
+                    )
+                ''')
+
+                await cursor.execute('''
                     CREATE TABLE IF NOT EXISTS hebao_items (
                         item_id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER NOT NULL,
@@ -75,10 +128,8 @@ async def create_table():
                 await cursor.execute('CREATE INDEX IF NOT EXISTS idx_hebao_user_item ON hebao_items(user_id, item_key)')
                 await cursor.execute('CREATE INDEX IF NOT EXISTS idx_hebao_quantity ON hebao_items(quantity)')
                 await cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)')
-                # await cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_activity ON users(user_activity)') # Будет создано позже в add_new_columns
                 await cursor.execute('CREATE INDEX IF NOT EXISTS idx_waifu_user ON waifu_cat(user_id)')
-                # await cursor.execute('CREATE INDEX IF NOT EXISTS idx_admins_user ON admins(user_id)') # Будет создано позже
-                # await cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_rules_chat ON chat_rules(chat_id)') # Будет создано позже
+                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_marriages_cat ON marriages(cat_id)')
                 
                 # Добавляем колонку для отслеживания последней ежедневной выдачи риса
                 try:
@@ -109,8 +160,7 @@ async def create_table():
             except Error as e:
                 logger.error(f"Ошибка при создании таблиц: {e}")
 
-# --- НОВАЯ ФУНКЦИЯ ДЛЯ ДОБАВЛЕНИЯ СТОЛБЦОВ ---
-async def add_new_columns():
+async def add_new_columns() -> None:
     """
     Добавляет новые столбцы (Description, Reputation, User_activity)
     в таблицу users, если они еще не существуют.
@@ -178,7 +228,8 @@ async def add_new_columns():
                     "description": "TEXT(25)",
                     "reputation": "INTEGER DEFAULT 0",
                     "user_activity": "INTEGER DEFAULT 0",
-                    "username": "TEXT"
+                    "username": "TEXT",
+                    "city": "TEXT"
                 }
                 
                 for column_name, column_def in columns_users.items():
@@ -205,6 +256,7 @@ async def add_new_columns():
                     "age_days": "INTEGER DEFAULT 1",
                     "last_age_update": "TEXT",
                     "last_satiety_update": "TEXT",
+                    "trust": "INTEGER DEFAULT 0"
                 }
 
                 for column_name, column_def in columns_waifu.items():
@@ -236,7 +288,7 @@ async def add_new_columns():
 
 
 
-async def check_and_fix_waifu_constraint():
+async def check_and_fix_waifu_constraint() -> None:
     """
     Проверяет и исправляет CHECK constraint в таблице waifu_cat.
     Заменяет 'loli' на 'kitten' в определении таблицы и самих данных.
@@ -312,9 +364,7 @@ async def check_and_fix_waifu_constraint():
             await conn.rollback()
             logger.error(f"Ошибка при миграции waifu_cat: {e}")
 
-# --- Функции для хэбао (инвентарь) ---
-
-def _hebao_row_to_dict(row):
+def _hebao_row_to_dict(row: aiosqlite.Row | None) -> dict | None:
     if not row:
         return None
     return {
@@ -440,7 +490,7 @@ async def get_hebao_overview(user_id: int, merge_waifu_rice: bool = True) -> lis
 
 # --- Функции для работы с waifu_cat ---
 
-def _waifu_row_to_dict(row):
+def _waifu_row_to_dict(row: aiosqlite.Row | None) -> dict | None:
     if not row:
         return None
     # Поддержка старых схем: если нет новых колонок, подставляем значения по умолчанию
@@ -460,10 +510,11 @@ def _waifu_row_to_dict(row):
         "age_days": safe(8, 1),
         "last_age_update": safe(9),
         "last_satiety_update": safe(10),
+        "trust": safe(11, 0),
     }
 
 
-async def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category: str = "kitten", mood: str = "отличное"):
+async def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category: str = "kitten", mood: str = "отличное") -> bool:
     """
     Создаёт запись кошко-жены для пользователя, если её ещё нет.
     Поле date_cat сохраняем в ISO-формате.
@@ -494,14 +545,15 @@ async def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category
 
             await cursor.execute(
                 """
-                INSERT INTO waifu_cat (user_id, cat_name, category_cats, date_cat, age_days, last_age_update, mood, satiety, last_satiety_update)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO waifu_cat (user_id, cat_name, category_cats, date_cat, age_days, last_age_update, mood, satiety, last_satiety_update, trust)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, cat_name, category, now_iso, 1, now_iso, mood, 100, now_iso),
+                (user_id, cat_name, category, now_iso, 1, now_iso, mood, 100, now_iso, 5),
             )
 
-            # Выдаём 1 миску риса
+            # Выдаём 1 миску риса и 3 корма кошко-жены (korm_waifu)
             await upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
+            await upsert_hebao_item(user_id, "korm_waifu", "корм кошко-жены", set_value=3)
             await conn.commit()
             
             logger.info(f"Кошка успешно создана для пользователя {user_id}, выдана 1 миска риса")
@@ -512,7 +564,7 @@ async def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category
             return False
 
 
-async def get_waifu_by_user(user_id: int):
+async def get_waifu_by_user(user_id: int) -> dict | None:
     """Возвращает словарь с данными кошко-жены пользователя или None."""
     async with await create_connection() as conn:
         if not conn:
@@ -522,7 +574,7 @@ async def get_waifu_by_user(user_id: int):
             await cursor.execute(
                 """
                 SELECT cats_id, user_id, cat_name, category_cats, date_cat,
-                       satiety, mood, image_cats, age_days, last_age_update, last_satiety_update
+                       satiety, mood, image_cats, age_days, last_age_update, last_satiety_update, trust
                 FROM waifu_cat WHERE user_id = ?
                 """,
                 (user_id,),
@@ -536,38 +588,12 @@ async def get_waifu_by_user(user_id: int):
 
 async def update_cat_name(user_id: int, new_name: str) -> bool:
     """Обновляет кличку кошко-жены пользователя. Возвращает True, если обновлено."""
-    async with await create_connection() as conn:
-        if not conn:
-            return False
-        try:
-            cursor = await conn.cursor()
-            await cursor.execute(
-                "UPDATE waifu_cat SET cat_name = ? WHERE user_id = ?",
-                (new_name, user_id),
-            )
-            await conn.commit()
-            return cursor.rowcount > 0
-        except Error as e:
-            logger.error(f"Ошибка обновления клички кошки: {e}")
-            return False
+    return await _generic_update("waifu_cat", "user_id", user_id, cat_name=new_name)
 
 
 async def update_cat_image(user_id: int, image_path: str) -> bool:
     """Сохраняет путь к изображению кошко-жены."""
-    async with await create_connection() as conn:
-        if not conn:
-            return False
-        try:
-            cursor = await conn.cursor()
-            await cursor.execute(
-                "UPDATE waifu_cat SET image_cats = ? WHERE user_id = ?",
-                (image_path, user_id),
-            )
-            await conn.commit()
-            return cursor.rowcount > 0
-        except Error as e:
-            logger.error(f"Ошибка обновления фото кошки: {e}")
-            return False
+    return await _generic_update("waifu_cat", "user_id", user_id, image_cats=image_path)
 
 
 async def update_cat_state(user_id: int, *, satiety: int | None = None,
@@ -575,48 +601,85 @@ async def update_cat_state(user_id: int, *, satiety: int | None = None,
     """
     Универсальное обновление динамических полей кошко-жены.
     Обновляет только переданные параметры.
-    Примечание: miska_risa больше не используется, рис хранится в hebao_items.
     """
+    fields = {}
+    if satiety is not None:
+        fields["satiety"] = satiety
+    if mood is not None:
+        fields["mood"] = mood
+    if last_satiety_update is not None:
+        fields["last_satiety_update"] = last_satiety_update
+
+    return await _generic_update("waifu_cat", "user_id", user_id, **fields)
+
+
+async def update_waifu_trust(user_id: int, delta: int) -> bool:
+    """Обновляет уровень доверия кошко-жены (диапазон 0-100)."""
     async with await create_connection() as conn:
         if not conn:
             return False
-
-        fields = []
-        values = []
-        if satiety is not None:
-            fields.append("satiety = ?")
-            values.append(satiety)
-        if mood is not None:
-            fields.append("mood = ?")
-            values.append(mood)
-        if last_satiety_update is not None:
-            fields.append("last_satiety_update = ?")
-            values.append(last_satiety_update)
-
-        if not fields:
-            return False
-
-        values.append(user_id)
-
         try:
             cursor = await conn.cursor()
             await cursor.execute(
-                f"UPDATE waifu_cat SET {', '.join(fields)} WHERE user_id = ?",
-                tuple(values),
+                "SELECT trust FROM waifu_cat WHERE user_id = ?", (user_id,)
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return False
+            
+            new_trust = max(0, min(100, row[0] + delta))
+            return await _generic_update("waifu_cat", "user_id", user_id, trust=new_trust)
+        except Error as e:
+            logger.error(f"Ошибка обновления доверия для user_id {user_id}: {e}")
+            return False
+
+
+async def get_marriage(user_id: int) -> dict | None:
+    """Возвращает данные о браке пользователя."""
+    async with await create_connection() as conn:
+        if not conn:
+            return None
+        try:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT marriage_id, user_id, cat_id, marriage_date FROM marriages WHERE user_id = ?",
+                (user_id,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    "marriage_id": row[0],
+                    "user_id": row[1],
+                    "cat_id": row[2],
+                    "marriage_date": row[3],
+                }
+            return None
+        except Error as e:
+            logger.error(f"Ошибка получения данных о браке для {user_id}: {e}")
+            return None
+
+
+async def register_marriage(user_id: int, cat_id: int) -> bool:
+    """Регистрирует новый брак."""
+    async with await create_connection() as conn:
+        if not conn:
+            return False
+        try:
+            cursor = await conn.cursor()
+            now_iso = datetime.utcnow().isoformat()
+            await cursor.execute(
+                "INSERT INTO marriages (user_id, cat_id, marriage_date) VALUES (?, ?, ?)",
+                (user_id, cat_id, now_iso),
             )
             await conn.commit()
-            return cursor.rowcount > 0
+            return True
         except Error as e:
-            logger.error(f"Ошибка обновления состояния кошки для user_id {user_id}: {e}")
+            logger.error(f"Ошибка регистрации брака для {user_id}: {e}")
             return False
 
 
 async def update_waifu_age(user_id: int, new_age: int, last_update_iso: str) -> bool:
     """Обновляет возраст и метку обновления, а также категорию на основе возраста."""
-    # Определяем категорию на основе возраста:
-    # 0-30 дней: kitten
-    # 31-120 дней: students
-    # 121+ дней: MILF
     if new_age <= 30:
         new_category = "kitten"
     elif new_age <= 120:
@@ -624,24 +687,10 @@ async def update_waifu_age(user_id: int, new_age: int, last_update_iso: str) -> 
     else:
         new_category = "MILF"
 
-    async with await create_connection() as conn:
-        if not conn:
-            return False
-        try:
-            cursor = await conn.cursor()
-            await cursor.execute(
-                """
-                UPDATE waifu_cat 
-                SET age_days = ?, last_age_update = ?, category_cats = ?
-                WHERE user_id = ?
-                """,
-                (new_age, last_update_iso, new_category, user_id),
-            )
-            await conn.commit()
-            return cursor.rowcount > 0
-        except Error as e:
-            logger.error(f"Ошибка обновления возраста кошки: {e}")
-            return False
+    return await _generic_update(
+        "waifu_cat", "user_id", user_id, 
+        age_days=new_age, last_age_update=last_update_iso, category_cats=new_category
+    )
 
 
 async def get_all_waifus_with_owners() -> list[dict]:
@@ -720,7 +769,7 @@ async def delete_waifu_by_user(user_id: int) -> bool:
             
 # --- ОСТАЛЬНЫЕ ВАШИ ФУНКЦИИ (без изменений) ---
 
-async def add_user(user_id: int, nickname: str, username: str | None = None):
+async def add_user(user_id: int, nickname: str, username: str | None = None) -> None:
     """
     Добавляет гражданина в БД с указанным ником и username.
     При повторном добавлении обновляет username.
@@ -760,7 +809,7 @@ async def add_user(user_id: int, nickname: str, username: str | None = None):
         except Error as e:
             logger.error(f"Ошибка при добавлении гражданина {user_id}: {e}")
 
-async def get_user_nickname(user_id: int) -> str:
+async def get_user_nickname(user_id: int) -> str | None:
     """Получает ник гражданина."""
     async with await create_connection() as conn:
         if not conn:
@@ -774,20 +823,11 @@ async def get_user_nickname(user_id: int) -> str:
             logger.error(f"Ошибка получения никнейма: {e}")
             return None
 
-async def set_user_nickname(user_id: int, nickname: str):
+async def set_user_nickname(user_id: int, nickname: str) -> bool:
     """Устанавливает ник гражданина."""
-    async with await create_connection() as conn:
-        if not conn:
-            return
-        try:
-            cursor = await conn.cursor()
-            await cursor.execute("UPDATE users SET nickname = ? WHERE user_id = ?", (nickname, user_id))
-            await conn.commit()
-            logger.info(f"Ник для {user_id} установлен: {nickname}")
-        except Error as e:
-            logger.error(f"Ошибка установки никнейма: {e}")
+    return await _generic_update("users", "user_id", user_id, nickname=nickname)
 
-async def get_user_profile(user_id: int):
+async def get_user_profile(user_id: int) -> dict | None:
     """Получает все данные гражданина для анкеты."""
     async with await create_connection() as conn:
         if not conn:
@@ -796,7 +836,7 @@ async def get_user_profile(user_id: int):
             cursor = await conn.cursor()
             # Выбираем все нужные поля одним запросом
             await cursor.execute("""
-                SELECT nickname, description, reputation, user_activity
+                SELECT nickname, description, reputation, user_activity, city
                 FROM users WHERE user_id = ?
             """, (user_id,))
             result = await cursor.fetchone()
@@ -806,7 +846,8 @@ async def get_user_profile(user_id: int):
                     "nickname": result[0],
                     "description": result[1],
                     "reputation": result[2],
-                    "activity": result[3]
+                    "activity": result[3],
+                    "city": result[4]
                 }
                 return profile_data
         except Error as e:
@@ -859,24 +900,8 @@ async def get_all_users() -> list[dict]:
 
 
 async def update_user_username(user_id: int, username: str | None) -> bool:
-    """
-    Обновляет username гражданина в базе данных.
-    """
-    async with await create_connection() as conn:
-        if not conn:
-            return False
-
-        try:
-            cursor = await conn.cursor()
-            await cursor.execute(
-                "UPDATE users SET username = ? WHERE user_id = ?",
-                (username, user_id)
-            )
-            await conn.commit()
-            return cursor.rowcount > 0
-        except Error as e:
-            logger.error(f"Ошибка при обновлении username для user_id {user_id}: {e}")
-            return False
+    """Обновляет username гражданина в базе данных."""
+    return await _generic_update("users", "user_id", user_id, username=username)
 
 
 async def delete_user_completely(username: str) -> bool:
@@ -980,7 +1005,7 @@ async def get_chat_rules(chat_id: int) -> str | None:
             return None
 
 
-async def get_chat_rules_info(chat_id: int):
+async def get_chat_rules_info(chat_id: int) -> dict | None:
     """
     Получает полную информацию о правилах чата.
     Возвращает словарь с данными или None.
@@ -1023,7 +1048,7 @@ async def delete_chat_rules(chat_id: int) -> bool:
 
 # --- Функции для ежедневной выдачи риса ---
 
-async def cleanup_expired_punishments():
+async def cleanup_expired_punishments() -> tuple[int, list]:
     """
     Автоматически снимает истекшие наказания.
     Возвращает количество снятых наказаний.
@@ -1322,20 +1347,11 @@ async def process_daily_rice_distribution() -> int:
             return 0
 
 
-async def set_user_description(user_id: int, description: str):
+async def set_user_description(user_id: int, description: str) -> bool:
     """Устанавливает или обновляет описание пользователя."""
-    async with await create_connection() as conn:
-        if conn:
-            try:
-                cursor = await conn.cursor()
-                # Название столбца 'Описание' берем из предыдущего шага
-                await cursor.execute("UPDATE users SET description = ? WHERE user_id = ?", (description, user_id))
-                await conn.commit()
-                logger.info(f"Описание для {user_id} установлено.")
-            except Error as e:
-                logger.error(f"Ошибка при установке описания для {user_id}: {e}")
+    return await _generic_update("users", "user_id", user_id, description=description)
 
-async def add_admin(user_id: int, first_name: str):
+async def add_admin(user_id: int, first_name: str) -> None:
     """Добавляет администратора в таблицу admins."""
     async with await create_connection() as conn:
         if conn:
@@ -1347,7 +1363,7 @@ async def add_admin(user_id: int, first_name: str):
             except Error as e:
                 logger.error(f"Ошибка при добавлении админа {user_id}: {e}")
 
-async def remove_admin(user_id: int):
+async def remove_admin(user_id: int) -> None:
     """Удаляет администратора из таблицы admins."""
     async with await create_connection() as conn:
         if conn:
@@ -1372,7 +1388,7 @@ async def is_admin(user_id: int) -> bool:
                 logger.error(f"Ошибка при проверке прав админа {user_id}: {e}")
     return False
 
-async def get_all_admins() -> list:
+async def get_all_admins() -> list[tuple[int, str]]:
     """Получает список всех администраторов (user_id и first_name)."""
     async with await create_connection() as conn:
         if conn:
@@ -1384,7 +1400,7 @@ async def get_all_admins() -> list:
                 logger.error(f"Ошибка при получении списка админов: {e}")
     return []
 
-async def initialize_admins(admin_ids: list):
+async def initialize_admins(admin_ids: list[int]) -> None:
     """Инициализирует таблицу admins из списка ADMIN_IDS, если она пуста."""
     async with await create_connection() as conn:
         if conn:
@@ -1400,8 +1416,24 @@ async def initialize_admins(admin_ids: list):
             except Error as e:
                 logger.error(f"Ошибка при инициализации админов: {e}")
 
+async def set_user_city(user_id: int, city: str) -> bool:
+    """Устанавливает или обновляет город пользователя."""
+    return await _generic_update("users", "user_id", user_id, city=city)
 
-async def get_user_description(user_id: int):
+async def get_user_city(user_id: int) -> str | None:
+    """Получает город пользователя из БД."""
+    async with await create_connection() as conn:
+        if conn:
+            try:
+                cursor = await conn.cursor()
+                await cursor.execute("SELECT city FROM users WHERE user_id = ?", (user_id,))
+                result = await cursor.fetchone()
+                return result[0] if result else None
+            except Error as e:
+                logger.error(f"Ошибка при получении города для {user_id}: {e}")
+    return None
+
+async def get_user_description(user_id: int) -> str | None:
     """Получает описание пользователя из БД."""
     async with await create_connection() as conn:
         if conn:
@@ -1435,19 +1467,9 @@ async def update_user_rate(user_id: int, rate: int) -> bool:
     Если рейтинг достигает 500 и у пользователя нет кошки, она создается автоматически.
     Возвращает True, если была создана новая кошка.
     """
-    async with await create_connection() as conn:
-        if not conn:
-            return False
-        try:
-            cursor = await conn.cursor()
-            await cursor.execute('''
-                UPDATE users SET reputation = ? WHERE user_id = ?
-            ''', (rate, user_id))
-            await conn.commit()
-            logger.info(f"Рейтинг пользователя {user_id} обновлён до {rate}")
-        except Exception as e:
-            logger.error(f"Ошибка при обновлении рейтинга для {user_id}: {e}")
-            return False
+    success = await _generic_update("users", "user_id", user_id, reputation=rate)
+    if not success:
+        return False
     
     # После обновления рейтинга проверяем, нужно ли создать кошку
     if rate >= 500:
@@ -1458,18 +1480,9 @@ async def update_user_rate(user_id: int, rate: int) -> bool:
     
     return False
 
-async def unrate_user(user_id: int, rate: int):
-    async with await create_connection() as conn:
-        if not conn:
-            return
-        try:
-            cursor = await conn.cursor()
-            await cursor.execute('''
-                UPDATE users SET reputation = ? WHERE user_id = ?
-            ''', (rate, user_id))
-            await conn.commit()
-        except Exception as e:
-            logger.error(f"Ошибка при сбросе рейтинга для {user_id}: {e}")
+async def unrate_user(user_id: int, rate: int) -> bool:
+    """Сбрасывает рейтинг пользователя."""
+    return await _generic_update("users", "user_id", user_id, reputation=rate)
 
 
 async def increment_user_activity(user_id: int) -> bool:
@@ -1506,7 +1519,7 @@ async def increment_user_activity(user_id: int) -> bool:
             logger.error(f"Ошибка при инкременте активности гражданина {user_id}: {e}")
             return False
 
-async def get_chat_leaderboard(limit: int = 10):
+async def get_chat_leaderboard(limit: int = 10) -> list[aiosqlite.Row]:
     """Получает топ граждан по активности."""
     async with await create_connection() as conn:
         if conn:
@@ -1547,7 +1560,7 @@ async def get_highly_active_users(min_activity: int) -> list[tuple[int, str, int
             return []
 
 
-async def reset_daily_activity():
+async def reset_daily_activity() -> bool:
     """Сбрасывает ежедневную активность всех граждан."""
     async with await create_connection() as conn:
         if not conn:
@@ -1565,12 +1578,12 @@ async def reset_daily_activity():
             return False
 
 
-async def get_daily_top(limit: int = 5) -> list[tuple[str, int]]:
+async def get_daily_top(limit: int = 5) -> list[aiosqlite.Row]:
     """Получает топ граждан по активности за текущий день."""
     return await get_chat_leaderboard(limit)
 
 
-async def get_monthly_top(limit: int = 30) -> list[tuple[str, int]]:
+async def get_monthly_top(limit: int = 30) -> list[aiosqlite.Row]:
     """Получает топ граждан по активности за текущий месяц."""
     # Пока что возвращаем общий топ, но в будущем можно добавить логику по месяцам
     return await get_chat_leaderboard(limit)
@@ -1917,53 +1930,3 @@ async def get_expired_punishments() -> list[dict]:
 
 
 
-
-async def get_rate_display(user_id: int) -> str:
-    """Возвращает красивое отображение рейтинга с эмодзи и текстом"""
-    rate = await get_user_rate(user_id)
-    if rate is None:
-        return f"❓ Ваш социальный рейтинг: Не указан (N/A)"
-        
-    if rate >= 5000:
-        return f"👑 Ваш социальный рейтинг: {rate} (S)"
-    elif 3500 <= rate <= 4999:
-        return f"🐉 Ваш социальный рейтинг: {rate} (A)"
-    elif 1000 <= rate <= 3499:
-        return f"☀️ Ваш социальный рейтинг: {rate} (B)"
-    elif 51 <= rate <= 999:
-        return f"🍀 Ваш социальный рейтинг: {rate} (C)"
-    elif -499 <= rate <= 50:
-        return f"😈 Ваш социальный рейтинг: {rate} (D)"
-    elif rate <= -500:
-        return f"☠️ Ваш социальный рейтинг: {rate} (F)"
-    else:
-        return f"❓ Ваш социальный рейтинг: {rate} (N/A)"
-
-# Регистрация самой анкеты, берет информацию из БД(будет использоваться и для профиля частично)
-async def get_profile_text(user_id: int) -> str:
-    """
-    Получает данные из БД и возвращает готовый текст для анкеты.
-    Эту функцию можно будет использовать в любом роутере.
-    """
-    profile_data = await get_user_profile(user_id)
-    rate_display = await get_rate_display(user_id)
-
-    if profile_data:
-        # Безопасное получение данных с значениями по умолчанию
-        nickname = profile_data.get("nickname", "Не указано")
-        reputation = profile_data.get("reputation", 0)
-        activity = profile_data.get("activity", "Не указано")
-        description = profile_data.get("description") or "Не указано"
-
-        # Собираем красивое сообщение
-        text = (
-            f"👤 <b>Досье гражданина</b>\n\n"
-            f"🗃️ <b>Учётное имя:</b> <code>{nickname}</code>\n"
-            f"🆔 <b>Публичный цифровой идентификатор:</b> <code>{user_id}</code>\n\n"
-            f"{rate_display}\n"
-            f"☀️ <b>Активность:</b> {activity}\n\n"
-            f"📄 <b>Описание:</b>\n<i>{description}</i>"
-        )
-        return text
-    else:
-        return "Не удалось найти твой профиль. Попробуй написать /start"

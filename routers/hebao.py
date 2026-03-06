@@ -30,45 +30,58 @@ def _format_hebao_message(user_id: int, user_display: str, items: list[dict], is
 
 @hebao_router.message(Command("hebao"))
 @hebao_router.message(F.text.lower().in_(["хэбао", "hebao", "мой хэбао", "что в хэбао"]))
-async def show_hebao(message: Message, command: CommandObject = None):
-    # Если есть аргумент @username или ID - показываем чужой хэбао
-    if command and command.args:
-        return await show_user_hebao(message, command)
-    
-    parts = message.text.split()
-    if len(parts) > 1 and parts[0].lower() in ["хэбао", "hebao"]:
-        return await show_user_hebao(message)
+async def show_hebao(message: Message, command: CommandObject = None) -> None:
+    try:
+        # Если есть аргумент @username или ID - показываем чужой хэбао
+        if command and command.args:
+            await show_user_hebao(message, command)
+            return
+        
+        text = message.text or ""
+        parts = text.split()
+        if len(parts) > 1 and parts[0].lower() in ["хэбао", "hebao"]:
+            await show_user_hebao(message)
+            return
 
-    viewer_id = message.from_user.id
-    target_id = viewer_id
-    target_display = message.from_user.full_name or "пользователь"
+        viewer_id = message.from_user.id
+        target_id = viewer_id
+        target_display = message.from_user.full_name or "пользователь"
 
-    items = await get_hebao_overview(target_id)
-    response = _format_hebao_message(target_id, target_display, items, is_own=True)
+        items = await get_hebao_overview(target_id)
+        response = _format_hebao_message(target_id, target_display, items, is_own=True)
 
-    await message.answer(response, parse_mode="HTML")
+        await message.answer(response, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Ошибка в show_hebao: {e}")
+        await message.answer("Ошибка при просмотре хэбао.")
 
 @hebao_router.message(F.text.lower().startswith("хэбао"))
-async def show_user_hebao(message: Message, command: CommandObject = None):
-    target_id = await resolve_user_id(message)
-    
-    if not target_id:
-        # Если не удалось разрешить из сообщения, возможно это аргумент команды
-        if command and command.args:
-            target_id = await resolve_user_id(command.args.split()[0])
-        elif not message.reply_to_message:
-            # Если просто "хэбао", показываем свой
-            parts = message.text.split()
-            if len(parts) == 1:
-                return await show_hebao(message)
-            target_id = await resolve_user_id(parts[1])
+async def show_user_hebao(message: Message, command: CommandObject = None) -> None:
+    try:
+        target_id = await resolve_user_id(message)
+        
+        if not target_id:
+            # Если не удалось разрешить из сообщения, возможно это аргумент команды
+            if command and command.args:
+                target_id = await resolve_user_id(command.args.split()[0])
+            elif not message.reply_to_message:
+                # Если просто "хэбао", показываем свой
+                text = message.text or ""
+                parts = text.split()
+                if len(parts) == 1:
+                    await show_hebao(message)
+                    return
+                target_id = await resolve_user_id(parts[1])
 
-    if not target_id:
-        await message.answer("Укажите пользователя. Пример: Хэбао @username")
-        return
+        if not target_id:
+            await message.answer("Укажите пользователя. Пример: Хэбао @username")
+            return
 
-    items = await get_hebao_overview(target_id)
-    target_display = await get_user_display_name(target_id)
-    response = _format_hebao_message(target_id, target_display, items, is_own=(target_id == message.from_user.id))
+        items = await get_hebao_overview(target_id)
+        target_display = await get_user_display_name(target_id)
+        response = _format_hebao_message(target_id, target_display, items, is_own=(target_id == message.from_user.id))
 
-    await message.answer(response, parse_mode="HTML")
+        await message.answer(response, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Ошибка в show_user_hebao: {e}")
+        await message.answer("Ошибка при просмотре чужого хэбао.")
