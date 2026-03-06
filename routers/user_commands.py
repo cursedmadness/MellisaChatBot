@@ -17,6 +17,11 @@ from routers.utils import (
     get_profile_text, get_rate_display, extract_args
 )
 from routers.weather_service import get_weather_string
+from routers.strings import HELP_TEXT
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 user_router = Router() # подключение роутеров
 
@@ -33,17 +38,52 @@ async def start_handler(message: Message, state: FSMContext) -> None:
     try:
         user_id = message.from_user.id
         first_name = message.from_user.first_name or "гражданин"
-        nickname = await get_user_nickname(user_id)
         
-        if nickname:
-            await message.answer(f"Приветствуем Вас снова, {nickname}! 👋\nПартия рада Вашему возвращению. Если хотите обновить свои данные, используйте команды профиля.")
-        else:
-            # Добавляем пользователя в базу данных (первично)
+        nickname = await get_user_nickname(user_id)
+        city = await get_user_city(user_id)
+        description = await get_user_description(user_id)
+        
+        if not nickname and not city and not description:
+            # Полностью новый гражданин
             await add_user(user_id, first_name, message.from_user.username)
-            await message.answer(f"🌸 Добро пожаловать, {first_name}. Ваш профиль загружен в систему. Партия гордится Вами!\n\n"
-                                f"Для начала давайте составим Ваше досье. Это обязательно для каждого достойного гражданина. 🇨🇳\n\n"
-                                f"<b>Как нам к Вам обращаться? (Ваш ник):</b>")
+            await message.answer(
+                f"🌸 Добро пожаловать, {first_name}. Ваш профиль загружен в систему. Партия гордится Вами!\n\n"
+                f"Для начала давайте составим Ваше досье. Это обязательно для каждого достойного гражданина. 🇨🇳\n\n"
+                f"<b>Как нам к Вам обращаться? (Ваш ник):</b>"
+            )
             await state.set_state(RegistrationStates.waiting_for_nickname)
+            return
+
+        # Пользователь уже есть в системе, проверяем недостающие данные
+        missing_parts = []
+        if not nickname:
+            missing_parts.append("ника (используйте команду <code>.ник [Ваш ник]</code>)")
+        if not city:
+            missing_parts.append("гОрода (поможет узнавать погоду утром, используйте команду <code>.город [Ваш город]</code>)")
+        if not description:
+            missing_parts.append("описания (расскажите о себе, используя команду <code>.описание [Ваш текст]</code>)")
+            
+        if missing_parts:
+            missing_text = "\n• ".join(missing_parts)
+            if len(missing_parts) == 1:
+                intro_text = "Мы заметили, что в Вашем досье не хватает следующего пункта:"
+            else:
+                intro_text = "Мы заметили, что в Вашем досье не хватает некоторых данных:"
+                
+            await message.answer(
+                f"Приветствуем Вас снова, {greeting_name}! 👋\nПартия рада Вашему возвращению.\n\n"
+                f"{intro_text}\n"
+                f"• {missing_text}\n\n"
+                f"Пожалуйста, заполните их для полноценного участия в жизни общества! 🇨🇳"
+            )
+        else:
+            await message.answer(
+                f"Приветствуем Вас снова, {greeting_name}! 👋\nПартия рада Вашему возвращению.\n\n"
+                f"Ваше досье полностью заполнено! Партия гордится Вами. 🌟\n\n"
+                f"Если захотите обновить данные, Вы всегда можете использовать команды:\n"
+                f"<code>.ник [Ник]</code>\n<code>.город [Город]</code>\n<code>.описание [Описание]</code>"
+            )
+        await state.clear()
     except Exception as e:
         logger.error(f"Ошибка в start_handler: {e}")
         await message.answer("Произошла ошибка при запуске. Попробуйте позже.")
@@ -170,10 +210,22 @@ async def set_description_group_stub(message: Message):
     await message.reply("⚠️ Гражданин, изменение описания разрешено только в <b>личных сообщениях</b> бота. 🇨🇳")
 
 @user_router.message(Command('set_city'), F.chat.type == "private")
-@user_router.message(F.text.lower().startswith(('.город ', 'город ', '/set_city ', 'сменить город ')), F.chat.type == "private")
-async def set_city_command_handler(message: Message, state: FSMContext):
-    await message.answer("📍 Напишите Ваш город:")
-    await state.set_state(RegistrationStates.waiting_for_city)
+@user_router.message(F.text.lower().startswith(('.город', 'город', '/set_city', 'сменить город')), F.chat.type == "private")
+async def set_city_command_handler(message: Message, state: FSMContext) -> None:
+    try:
+        text = message.text or ""
+        city = extract_args(text, ['/set_city', '.город', 'город', 'сменить город'])
+        
+        if city:
+            await set_user_city(message.from_user.id, city)
+            await message.answer(f"✅ Город <b>{city}</b> успешно закреплен за Вами.")
+            await state.clear()
+        else:
+            await message.answer("📍 Напишите Ваш город:")
+            await state.set_state(RegistrationStates.waiting_for_city)
+    except Exception as e:
+        logger.error(f"Ошибка в set_city_command_handler: {e}")
+        await message.answer("Не удалось сменить город.")
 
 @user_router.message(F.text.lower().startswith(('.город ', 'город ', 'сменить город ')), F.chat.type != "private")
 async def set_city_group_stub(message: Message):
@@ -298,7 +350,7 @@ async def my_rate(message: Message) -> None:
 @user_router.message(F.text.lower().in_(['пинг','социальный пинг-понг']))
 async def ping_bot(message: Message) -> None:
     try:
-        ev = (datetime.datetime.now(tz=datetime.timezone.utc) - message.date).microseconds / 1000000
+        ev = (datetime.datetime.now(tz=datetime.timezone.utc) - message.date).seconds / 1000
         sent_message = await message.answer("🤖 Измеряю пинг...")
         # Устанавливаем порог для пинга
         ping_threshold_sec = 0.05
@@ -326,7 +378,7 @@ async def admin_list_command(message: Message) -> None:
 
         admin_list_text = "<b>🎓 Наши смотрители:</b>\n"
         for user_id, first_name in admins:
-            admin_list_text += f"- {get_user_link(user_id, first_name)}\n"
+            admin_list_text += f"– {get_user_link(user_id, first_name)}\n"
 
         await message.answer(admin_list_text, parse_mode='HTML')
     except Exception as e:
@@ -378,40 +430,14 @@ async def show_user_id(message: Message, command: CommandObject = None) -> None:
 async def help_command(message: Message) -> None:
     """Отправляет гражданину список доступных команд."""
     try:
-        help_text = """
-        <b>🎓 Список доступных команд:</b>
-        
-        <b>Общие команды:</b>
-        - /profile - Показать свой профиль
-        - /weather {город} - Показать погоду в городе
-        - /set_city {город} - Установить город
-        - /set_nickname {ник} - Установить ник
-        - /set_description {описание} - Установить описание
-        - /delete_nickname - Удалить ник
-        - /delete_description - Удалить описание
-        - /show_user_id {пользователь} - Показать ID пользователя
-        - /help - Показать этот список
-        
-        <b>Команды для кошко-жен:</b>
-        - /my_cat - Показать свою кошко-жену
-        - /feed_cat - Покормить кошко-жену
-        - /play_with_cat - Поиграть с кошко-женой
-        - /pet_cat - Погладить кошко-жену
-        - /marry_cat - Выйти замуж за кошко-жену
-        - /divorce_cat - Развестись с кошко-женой
-        
-        <b>Команды для кошко-мужей:</b>
-        - /my_waifu - Показать свою кошко-жену
-        - /feed_waifu - Покормить кошко-жену
-        - /play_with_waifu - Поиграть с кошко-женой
-        - /pet_waifu - Погладить кошко-жену
-        - /marry_waifu - Выйти замуж за кошко-жену
-        - /divorce_waifu - Развестись с кошко-женой
-        """
-        await message.answer(help_text, parse_mode="HTML")
+        await message.answer(HELP_TEXT, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Ошибка в help_command: {e}")
 
 @user_router.message(Command("Kill"))
 @user_router.message(F.text.lower().in_(['самовыпил']))
-async def Kill_command(message: Message):
+async def Kill_command(message: Message) -> None:
+    try:
+        await message.answer("❌ Партия не одобряет")
+    except Exception as e:
+        logger.error(f"Ошибка в Kill_command: {e}")

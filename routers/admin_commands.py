@@ -6,13 +6,19 @@ from aiogram import Bot
 import logging
 import asyncio
 
+import io
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from datetime import datetime
+from aiogram.types import BufferedInputFile
+
 from database import (
     is_admin, add_admin, remove_admin,
     get_user_rate, update_user_rate, unrate_user,
     add_user, delete_user_completely, get_user_by_username,
     reset_all_rice_to_one, reset_all_ratings_to_default,
     get_all_waifus_with_owners, clear_all_waifus,
-    get_all_users
+    get_all_users, get_user_rating_history
 )
 from routers.utils import (
     resolve_user_id, get_user_link, get_user_display_name,
@@ -54,11 +60,11 @@ async def add_admin_command(message: Message, command: CommandObject = None) -> 
             return
 
         if await is_admin(target_user_id):
-            await message.answer(f"{get_user_link(target_user_id)} уже является главой!")
+            await message.answer(f"Гражданин {get_user_link(target_user_id)} уже всемогущ!")
             return
 
         await add_admin(target_user_id, target_name)
-        await message.answer(f"Гражданин {get_user_link(target_user_id, target_name)} назначен главой!")
+        await message.answer(f"Гражданин {get_user_link(target_user_id, target_name)} теперь всемогущ!")
     except Exception as e:
         logger.error(f"Ошибка в add_admin_command: {e}")
         await message.answer("Ошибка при назначении главы.")
@@ -87,7 +93,7 @@ async def remove_admin_command(message: Message, command: CommandObject = None) 
 
         await remove_admin(target_user_id)
         target_display = await get_user_display_name(target_user_id)
-        await message.answer(f"Гражданин {target_display} удалён из глав!")
+        await message.answer(f"Гражданин {target_display} больше не состоит в партии!")
     except Exception as e:
         logger.error(f"Ошибка в remove_admin_command: {e}")
         await message.answer("Ошибка при снятии с должности главы.")
@@ -155,6 +161,79 @@ async def add_rate(message: Message, command: CommandObject = None) -> None:
 @admin_router.message(F.text.lower().startswith("-рейтинг"))
 async def remove_rate(message: Message, command: CommandObject = None) -> None:
     await _modify_rate(message, command, -1)
+
+@admin_router.message(
+    F.text.lower().in_(['.график', 'график']) | 
+    F.text.lower().startswith('.график ') | 
+    F.text.lower().startswith('график ')
+)
+async def rating_history_command(message: Message, command: CommandObject = None) -> None:
+    try:
+        target_user_id, target_name = await extract_target_user(message, command)
+        
+        # Если цель не указана, показываем график того, кто запросил
+        if not target_user_id:
+            target_user_id = message.from_user.id
+            target_name = message.from_user.first_name
+            
+        history = await get_user_rating_history(target_user_id)
+        
+        if not history:
+            await message.answer(f"В архивах Партии пока нет записей об изменении рейтинга гражданина {target_name}.")
+            return
+            
+        # Подготовка данных для графика
+        dates = []
+        ratings = []
+        for date_str, rate in history:
+            try:
+                dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                dates.append(dt)
+                ratings.append(rate)
+            except ValueError:
+                continue
+                
+        if not dates:
+            await message.answer("Ошибка при чтении дат из архива.")
+            return
+
+        # Создание графика
+        plt.figure(figsize=(10, 6))
+        plt.plot(dates, ratings, marker='o', linestyle='-', color='red', linewidth=2, markersize=6)
+        
+        plt.title(f'Динамика социального рейтинга: {target_name}', fontsize=14, fontweight='bold', pad=15)
+        plt.xlabel('Дата и время', fontsize=12)
+        plt.ylabel('Очки рейтинга', fontsize=12)
+        
+        plt.grid(True, linestyle='--', alpha=0.7)
+        
+        # Настройка форматирования дат на оси X
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%d.%m %H:%M'))
+        plt.gcf().autofmt_xdate() # Автоматический поворот дат
+        
+        # Выделение начальной точки (если есть) зеленым, и текущего рейтинга
+        plt.scatter(dates[0], ratings[0], color='green', s=100, zorder=5, label='Начало отслеживания')
+        plt.scatter(dates[-1], ratings[-1], color='blue', s=100, zorder=5, label='Текущий рейтинг')
+        plt.legend()
+        
+        plt.tight_layout()
+        
+        # Сохранение графика в память
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        # Отправка графика в чат
+        photo = BufferedInputFile(buf.read(), filename="rating_history.png")
+        await message.answer_photo(
+            photo, 
+            caption=f"📈 <b>Мониторинг лояльности</b>\nГражданин: {target_name}\nЗаписей в архиве: {len(history)}\nТекущий рейтинг: {ratings[-1]}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка в rating_history_command: {e}")
+        await message.answer("Не удалось извлечь архивные записи активности.")
 
 @admin_router.message(F.text.lower().startswith('анрейт'))
 async def unrate(message: Message, command: CommandObject = None) -> None:

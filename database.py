@@ -223,6 +223,17 @@ async def add_new_columns() -> None:
                 await cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishment_history_user ON punishment_history(user_id)')
                 await cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishment_history_timestamp ON punishment_history(timestamp)')
                 
+                # Таблица истории рейтинга
+                await cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS rating_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        reputation INTEGER NOT NULL,
+                        change_date TEXT DEFAULT (datetime('now', 'localtime'))
+                    )
+                ''')
+                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_rating_history_user ON rating_history(user_id)')
+                
                 # Словарь: имя_столбца -> тип_данных_и_ограничения
                 columns_users = {
                     "description": "TEXT(25)",
@@ -801,6 +812,9 @@ async def add_user(user_id: int, nickname: str, username: str | None = None) -> 
                     """,
                     (user_id, nickname, username, 300),
                 )
+                # Логируем начальный рейтинг 300
+                await _log_rating_history_cursor(conn, cursor, user_id, 300)
+                
                 # Выдаем 1 миску риса
                 await upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
                 logger.info(f"Новому гражданину {user_id} (@{username or 'нет'}) установлен рейтинг 300 и выдана 1 миска риса")
@@ -1269,6 +1283,8 @@ async def reset_all_ratings_to_default(default_rating: int = 100) -> int:
                     if cursor.rowcount > 0:
                         updated_count += 1
                         logger.info(f"Гражданин {user_id}: рейтинг сброшен с {current_rating} до {default_rating}")
+                        # Логируем сброс
+                        await _log_rating_history_cursor(conn, cursor, user_id, default_rating)
 
             await conn.commit()
             logger.info(f"Сброс рейтинга завершен. Обновлено {updated_count} граждан до {default_rating}")
@@ -1460,6 +1476,46 @@ async def get_user_rate(user_id: int) -> int:
             logger.error(f"Ошибка при получении рейтинга для {user_id}: {e}")
             return None
 
+async def get_user_rating_history(user_id: int) -> list[tuple[str, int]]:
+    """
+    Получает историю изменения рейтинга пользователя.
+    Возвращает список кортежей (дата_изменения, рейтинг), отсортированных по дате (от старых к новым).
+    """
+    async with await create_connection() as conn:
+        if not conn:
+            return []
+        try:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT change_date, reputation FROM rating_history WHERE user_id = ? ORDER BY change_date ASC",
+                (user_id,)
+            )
+            rows = await cursor.fetchall()
+            return [(r[0], r[1]) for r in rows]
+        except Error as e:
+            logger.error(f"Ошибка при получении истории рейтинга для {user_id}: {e}")
+            return []
+
+async def _log_rating_history(user_id: int, rate: int) -> None:
+    """Внутренняя функция для записи истории изменения рейтинга."""
+    async with await create_connection() as conn:
+        if conn:
+            try:
+                cursor = await conn.cursor()
+                await _log_rating_history_cursor(conn, cursor, user_id, rate)
+                await conn.commit()
+            except Error as e:
+                logger.error(f"Ошибка при записи истории рейтинга пользователя {user_id}: {e}")
+
+async def _log_rating_history_cursor(conn, cursor, user_id: int, rate: int) -> None:
+    """Функция записи истории рейтинга с использованием переданного курсора для массовых операций."""
+    try:
+        await cursor.execute(
+            "INSERT INTO rating_history (user_id, reputation, change_date) VALUES (?, ?, ?)",
+            (user_id, rate, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+    except Error as e:
+        logger.error(f"Ошибка при записи истории рейтинга курсором {user_id}: {e}")
 
 async def update_user_rate(user_id: int, rate: int) -> bool:
     """
@@ -1470,6 +1526,9 @@ async def update_user_rate(user_id: int, rate: int) -> bool:
     success = await _generic_update("users", "user_id", user_id, reputation=rate)
     if not success:
         return False
+    
+    # Логируем изменение
+    await _log_rating_history(user_id, rate)
     
     # После обновления рейтинга проверяем, нужно ли создать кошку
     if rate >= 500:
@@ -1482,7 +1541,10 @@ async def update_user_rate(user_id: int, rate: int) -> bool:
 
 async def unrate_user(user_id: int, rate: int) -> bool:
     """Сбрасывает рейтинг пользователя."""
-    return await _generic_update("users", "user_id", user_id, reputation=rate)
+    success = await _generic_update("users", "user_id", user_id, reputation=rate)
+    if success:
+        await _log_rating_history(user_id, rate)
+    return success
 
 
 async def increment_user_activity(user_id: int) -> bool:
@@ -1644,7 +1706,10 @@ async def reset_user_rating(user_id: int) -> bool:
             cursor = await conn.cursor()
             await cursor.execute("UPDATE users SET reputation = 0 WHERE user_id = ?", (user_id,))
             await conn.commit()
-            return cursor.rowcount > 0
+            if cursor.rowcount > 0:
+                await _log_rating_history(user_id, 0)
+                return True
+            return False
         except Error as e:
             logger.error(f"Ошибка при обнулении рейтинга пользователя {user_id}: {e}")
             return False

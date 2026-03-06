@@ -209,7 +209,7 @@ async def show_stats_handler(message: Message) -> None:
         response_text = "✍️ <b>Сводка народной активности</b>\n\n"
         
         for i, (nickname, activity) in enumerate(leaderboard, 1):
-            response_text += f"{i}. {nickname} - {activity} сообщений\n"
+            response_text += f"{i}. {nickname} – {activity} сообщений\n"
             
         await message.answer(response_text)
     except Exception as e:
