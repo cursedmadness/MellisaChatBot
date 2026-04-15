@@ -191,50 +191,57 @@ async def monthly_report_task(bot: Bot):
 # Роутер выводит статистику
 @activity_routers.message(Command('activity'))
 @activity_routers.message(F.text.lower().in_(['статистика','стата','сводка','активность','актив']))
-async def show_stats_handler(message: Message):
-    # 1. Проверяем, можно ли использовать команду в этом чате
-    if message.chat.id not in STATS_ENABLED_CHATS:
-        await message.answer("В этом чате статистика отключена.")
-        return
+async def show_stats_handler(message: Message) -> None:
+    try:
+        # 1. Проверяем, можно ли использовать команду в этом чате
+        if message.chat.id not in STATS_ENABLED_CHATS:
+            await message.answer("В этом чате статистика отключена.")
+            return
 
-    # 2. Получаем данные из БД
-    leaderboard = await get_chat_leaderboard(STATS_LEADERBOARD_LIMIT)
+        # 2. Получаем данные из БД
+        leaderboard = await get_chat_leaderboard(STATS_LEADERBOARD_LIMIT)
 
-    if not leaderboard:
-        await message.answer("Пока нечего показывать. Статистика пуста.")
-        return
+        if not leaderboard:
+            await message.answer("Пока нечего показывать. Статистика пуста.")
+            return
 
-    # 3. Формируем красивый ответ
-    response_text = "✍️ <b>Сводка народной активности</b>\n\n"
-    
-    for i, (nickname, activity) in enumerate(leaderboard, 1):
-        response_text += f"{i}. {nickname} - {activity} сообщений\n"
+        # 3. Формируем красивый ответ
+        response_text = "✍️ <b>Сводка народной активности</b>\n\n"
         
-    await message.answer(response_text)
+        for i, (nickname, activity) in enumerate(leaderboard, 1):
+            response_text += f"{i}. {nickname} – {activity} сообщений\n"
+            
+        await message.answer(response_text)
+    except Exception as e:
+        logger.error(f"Ошибка в show_stats_handler: {e}")
+        await message.answer("Ошибка при получении статистики.")
 
 # Роутер собирающий статистику
 @activity_routers.message(F.text & ~F.text.startswith("/"))
-async def count_messages(message: Message):
-    # 1. Проверяем, находится ли чат в нашем списке
-    if message.chat.id not in STATS_ENABLED_CHATS:
-        return # Если нет, просто ничего не делаем
+async def count_messages(message: Message) -> None:
+    try:
+        # 1. Проверяем, находится ли чат в нашем списке
+        if message.chat.id not in STATS_ENABLED_CHATS:
+            return # Если нет, просто ничего не делаем
 
-    # 2. Если чат в списке, увеличиваем счетчик
-    user_id = message.from_user.id
-    if not await increment_user_activity(user_id):
-        logger.error(f"Не удалось увеличить активность пользователя {user_id}")
-    
-    # 3. Случайные поощрения от Партии
-    # Например, с шансом 1% при каждом сообщении
-    if random.random() < 0.01:
-        pride_messages = [
-            "Партия гордится тобой, {link}!",
-            "Твой вклад в общение неоценим, {link}. Партия ценит это!",
-            "Продолжай в том же духе, {link}! Социальный кредит растет в наших сердцах.",
-            "Гражданин {link}, ваше усердие замечено высшим руководством!",
-            "Партия видит твой труд, {link}. Так держать!"
-        ]
-        user_link = get_user_link(user_id, message.from_user.first_name)
-        text = random.choice(pride_messages).format(link=user_link)
-        await message.answer(text)
-    # Никакого ответа в чат не посылаем, чтобы не спамить
+        # 2. Если чат в списке, увеличиваем счетчик
+        user_id = message.from_user.id
+        if not await increment_user_activity(user_id):
+            logger.error(f"Не удалось увеличить активность пользователя {user_id}")
+        
+        # 3. Случайные поощрения от Партии
+        # Например, с шансом 1% при каждом сообщении
+        if random.random() < 0.01:
+            pride_messages = [
+                "Партия гордится тобой, {link}!",
+                "Твой вклад в общение неоценим, {link}. Партия ценит это!",
+                "Продолжай в том же духе, {link}! Социальный кредит растет в наших сердцах.",
+                "Гражданин {link}, ваше усердие замечено высшим руководством!",
+                "Партия видит твой труд, {link}. Так держать!"
+            ]
+            user_link = get_user_link(user_id, message.from_user.first_name)
+            text = random.choice(pride_messages).format(link=user_link)
+            await message.answer(text)
+        # Никакого ответа в чат не посылаем, чтобы не спамить
+    except Exception as e:
+        logger.error(f"Ошибка в count_messages: {e}")
