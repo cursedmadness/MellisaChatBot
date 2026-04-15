@@ -1,0 +1,231 @@
+# main.py
+from routers import main_router
+from aiogram import Bot, Dispatcher
+import asyncio
+import logging
+from datetime import datetime, time, timedelta, timezone
+from dotenv import load_dotenv
+
+from database import (
+    create_table, 
+    add_new_columns, 
+    initialize_admins, 
+    process_daily_rice_distribution, 
+    initialize_default_ratings,
+    get_all_waifus_with_owners,
+    get_user_city,
+    init_db,
+    close_db
+)
+from routers.moderation_commands import cleanup_expired_punishments_task
+from routers.activity_commands import daily_report_task, monthly_report_task
+from routers.weather_service import get_weather_string
+from routers.strings import MORNING_PHRASES, NIGHT_PHRASES, HUNGER_PHRASES
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from config import (
+    BOT_TOKEN, PARSE_MODE, LINK_PREVIEW_DISABLED, LOG_LEVEL, LOG_FORMAT,
+    DAILY_RICE_TIME_HOUR, ADMIN_IDS
+)
+import random
+
+
+# Загружаем переменные окружения
+load_dotenv()
+
+# Настройка логирования
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
+    format=LOG_FORMAT,
+)
+logger = logging.getLogger(__name__)
+
+# Проверка токена
+if not BOT_TOKEN:
+    logger.error("Токен бота не найден!")
+    raise ValueError("Токен бота не настроен. Проверьте переменную окружения BOT_TOKEN")
+
+# Инициализация бота и диспетчера
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(
+        parse_mode=getattr(ParseMode, PARSE_MODE.upper(), ParseMode.HTML),
+        link_preview_is_disabled=LINK_PREVIEW_DISABLED
+    )
+)
+dp = Dispatcher()
+dp.include_router(main_router)
+
+async def daily_rice_task_runner():
+    """Фоновая задача для ежедневной выдачи риса."""
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            target_time = time(DAILY_RICE_TIME_HOUR, 0, 0)
+            next_run = datetime.combine(now.date(), target_time, tzinfo=timezone.utc)
+
+            if now.time() >= target_time:
+                next_run += timedelta(days=1)
+
+            wait_seconds = (next_run - now).total_seconds()
+            logger.info(f"Следующая выдача риса через {wait_seconds:.1f} сек. (в {DAILY_RICE_TIME_HOUR}:00 UTC)")
+            await asyncio.sleep(wait_seconds)
+
+            logger.info("Начинается ежедневная выдача риса...")
+            distributed = await process_daily_rice_distribution()
+            logger.info(f"Ежедневная выдача риса завершена. Выдано {distributed} пользователям")
+
+        except Exception as e:
+            logger.error(f"Ошибка в задаче ежедневной выдачи риса: {e}")
+            await asyncio.sleep(60)
+
+async def waifu_greetings_task(bot: Bot):
+    """Фоновая задача для приветствий от кошко-жен в 09:00 и 23:00 МСК."""
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            # МСК = UTC+3
+            # 09:00 MSK = 06:00 UTC
+            # 23:00 MSK = 20:00 UTC
+            
+            times = [time(6, 0, 0), time(20, 0, 0)]
+            
+            next_runs = []
+            for t in times:
+                run = datetime.combine(now.date(), t, tzinfo=timezone.utc)
+                if run <= now:
+                    run += timedelta(days=1)
+                next_runs.append(run)
+            
+            target_run = min(next_runs)
+            wait_seconds = (target_run - now).total_seconds()
+            
+            logger.info(f"Следующее приветствие кошек через {wait_seconds:.1f} сек.")
+            await asyncio.sleep(wait_seconds)
+            
+            # Проверяем, какое это время (утро или ночь) в UTC
+            # 6 UTC -> Утро МСК, 20 UTC -> Ночь МСК
+            is_morning = target_run.hour == 6
+
+            # Генерируем сообщения для каждого владельца
+            logger.info(f"Начинается рассылка приветствий ({'утро' if is_morning else 'ночь'})")
+            waifus = await get_all_waifus_with_owners()
+            
+            for w in waifus:
+                try:
+                    user_id = w["user_id"]
+                    cat_name = w["cat_name"] or "кошко-жена"
+                    
+                    # Выбираем рандомную фразу
+                    if is_morning:
+                        base_text = random.choice(MORNING_PHRASES)
+                    else:
+                        base_text = random.choice(NIGHT_PHRASES)
+                    
+                    # Подставляем имя кошки
+                    final_text = base_text.format(cat_name=cat_name)
+                    
+                    # Добавляем погоду утром
+                    if is_morning:
+                        city = await get_user_city(user_id)
+                        if city:
+                            weather_info = await get_weather_string(city)
+                            if weather_info:
+                                final_text += f"\n\n{weather_info}"
+
+                    # Отправляем сообщение владельцу
+                    await bot.send_message(user_id, final_text)
+                    await asyncio.sleep(0.05) # Задержка для соблюдения лимитов
+                except Exception as send_err:
+                    logger.debug(f"Не удалось отправить приветствие пользователю {user_id}: {send_err}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка в задаче приветствий кошек: {e}")
+            await asyncio.sleep(60)
+
+
+async def waifu_hunger_notifier_task(bot: Bot):
+    """Фоновая задача для уведомления владельцев, чьи кошки голодны."""
+    while True:
+        try:
+            # Проверка каждые 4 часа
+            await asyncio.sleep(4 * 3600)
+            
+            waifus = await get_all_waifus_with_owners()
+            for w in waifus:
+                user_id = w["user_id"]
+                cat_name = w["cat_name"] or "кошко-жена"
+                
+                # Применяем декремент сытости по времени
+                from routers.waifu_cat import _apply_satiety_decay
+                await _apply_satiety_decay(w)
+                
+                if (w.get("satiety") or 0) < 30:
+                    try:
+                        mention = f"<a href='tg://user?id={user_id}'>хозяин</a>"
+                        phrase = random.choice(HUNGER_PHRASES).format(mention=mention, cat_name=cat_name)
+                        await bot.send_message(user_id, phrase)
+                        await asyncio.sleep(0.05)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"Ошибка в задаче уведомлений о голоде: {e}")
+            await asyncio.sleep(60)
+
+async def main():
+    try:
+        logger.info("Инициализация базы данных...")
+        await init_db()
+        await create_table()
+        await add_new_columns()
+        await initialize_admins(ADMIN_IDS)
+
+        initialized_count = await initialize_default_ratings(100)
+        if initialized_count > 0:
+            logger.info(f"Инициализировано {initialized_count} граждан с базовым рейтингом 100")
+
+        logger.info("База данных готова.")
+    except Exception as e:
+        logger.error(f"Ошибка при инициализации БД: {e}")
+        raise
+
+    # Запускаем фоновые задачи
+    tasks = [
+        asyncio.create_task(daily_rice_task_runner()),
+        asyncio.create_task(cleanup_expired_punishments_task(bot)),
+        asyncio.create_task(daily_report_task(bot)),
+        asyncio.create_task(monthly_report_task(bot)),
+        asyncio.create_task(waifu_greetings_task(bot)),
+        asyncio.create_task(waifu_hunger_notifier_task(bot))
+    ]
+
+    logger.info("Запуск бота MellisaChatBot...")
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        
+        # Уведомление о запуске (дебаг)
+        DEV_CHAT_ID = -1002709445496
+        try:
+            await bot.send_message(
+                chat_id=DEV_CHAT_ID,
+                text=f"<b>Бот запущен и готов к работе!</b>\n\n"
+                     f" Время запуска: <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n")
+            logger.info(f"Уведомление о запуске отправлено в чат {DEV_CHAT_ID}")
+        except Exception as startup_err:
+            logger.warning(f"Не удалось отправить уведомление о запуске: {startup_err}")
+
+        await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"Ошибка при поллинге: {e}")
+    finally:
+        # Отменяем фоновые задачи при выходе
+        for task in tasks:
+            task.cancel()
+        await close_db()
+        await bot.session.close()
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Бот остановлен.")
