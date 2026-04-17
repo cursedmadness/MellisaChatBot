@@ -55,6 +55,7 @@ async def start_handler(message: Message, state: FSMContext) -> None:
             return
 
         # Пользователь уже есть в системе, проверяем недостающие данные
+        greeting_name = nickname or first_name
         missing_parts = []
         if not nickname:
             missing_parts.append("ника (используйте команду <code>.ник [Ваш ник]</code>)")
@@ -259,10 +260,10 @@ async def weather_command_handler(message: Message, command: CommandObject = Non
             return
 
         # Получаем погоду (краткую версию)
-        weather_info = await get_weather_string(city, concise=True)
+        weather_info = await get_weather_string(city_name=city, concise=True)
         
         if weather_info:
-            await message.answer(f"🏙 <b>Погода в г. {city.capitalize()}:</b>\n{weather_info}")
+            await message.answer(weather_info)
         else:
             await message.answer(f"❌ Не удалось получить данные о погоде для города <b>{city}</b>. Проверьте правильность написания.")
     except Exception as e:
@@ -350,16 +351,23 @@ async def my_rate(message: Message) -> None:
 @user_router.message(F.text.lower().in_(['пинг','социальный пинг-понг']))
 async def ping_bot(message: Message) -> None:
     try:
-        ev = (datetime.datetime.now(tz=datetime.timezone.utc) - message.date).seconds / 1000
+        # Засекаем время перед отправкой тестового сообщения
+        start_time = datetime.datetime.now()
         sent_message = await message.answer("🤖 Измеряю пинг...")
-        # Устанавливаем порог для пинга
-        ping_threshold_sec = 0.05
+        end_time = datetime.datetime.now()
+        
+        # Считаем точное время отклика серверов Telegram
+        delta = end_time - start_time
+        ev_ms = round(delta.total_seconds() * 1000, 2)
+        
+        # Устанавливаем порог (например, 500 мс)
+        ping_threshold_ms = 500.0
 
         # Проверяем значение пинга и выбираем текст ответа
-        if ev < ping_threshold_sec:
-            out = f"🏓 Партия выиграла в пинг-понг за <code>{ev}</code> мс"
+        if ev_ms < ping_threshold_ms:
+            out = f"🏓 Партия выиграла в пинг-понг за <code>{ev_ms}</code> мс"
         else:
-            out = f"🏓 Партия проиграла в пинг-понг за <code>{ev}</code> мс"
+            out = f"🏓 Партия проиграла в пинг-понг за <code>{ev_ms}</code> мс"
         
         # Редактируем сообщение с окончательным ответом
         await sent_message.edit_text(out)

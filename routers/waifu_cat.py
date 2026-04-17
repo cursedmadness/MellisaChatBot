@@ -21,6 +21,7 @@ from database import (
     get_user_by_username,
     get_user_rice_count,
     upsert_hebao_item,
+    get_hebao_items,
     get_user_rate,
     get_all_waifus_with_owners,
     clear_all_waifus,
@@ -452,10 +453,22 @@ async def rename_cat(message: Message, command: CommandObject = None) -> None:
 
 
 
+FEED_COOLDOWN_HOURS = 4  # Кулдаун на кормёжку в часах
+
+# Шуточные фразы, когда кошка ещё не голодна
+_TOO_EARLY_PHRASES = [
+    "Мяу? Хозяин, я только что поела! Подожди немного, хорошо? 😾 Напомню, когда снова захочу кушать~",
+    "*смотрит на миску, потом на тебя* Хозяин, ты меня что, откармливать собрался? Ещё рано! 🐾",
+    "Мур-мур... Я благодарна, но я ещё сыта! Скоро сама дам знать, когда пора за стол~ 🍽️",
+    "Нет-нет-нет! Кошки не едят когда попало, мы существа с расписанием! Подожди, хозяин 😤",
+    "*отворачивает морду от миски* Спасибо, но рано. Я напомню, когда придёт время~ 🌸",
+]
+
+
 @waifu_cat_router.message(Command("feed_korm"))
 @waifu_cat_router.message(F.text.lower().in_(["дать корм", "покормить кормом", "вкусняшка"]))
 async def feed_waifu_korm(message: Message) -> None:
-    """Кормление специальным кормом: сытость 100 + доверие +5."""
+    """Кормление кормом: сытость 100 + доверие +5. Окна: утро (6-12) и вечер (18-24)."""
     try:
         user_id = message.from_user.id
         waifu = await get_waifu_by_user(user_id)
@@ -463,20 +476,117 @@ async def feed_waifu_korm(message: Message) -> None:
             await message.answer("У тебя пока нет кошко-жены.")
             return
 
-        # Тратим корм
-        used = await upsert_hebao_item(user_id, "korm_waifu", delta=-1)
-        if not used:
-            await message.answer("У вас нет корма для кошко-жены. 😿")
+        cat_name = waifu.get("cat_name") or "мяу"
+        now = datetime.now(timezone.utc)
+        
+        # Определяем локальное время для проверки окон (утро/вечер)
+        local_now = now.astimezone()
+        hour = local_now.hour
+
+        is_morning = 6 <= hour < 12
+        is_evening = 18 <= hour < 24
+
+        from datetime import timedelta
+
+        # 1. Проверяем, правильное ли сейчас время суток для еды
+        if not (is_morning or is_evening):
+            # Считаем, сколько осталось до следующего окна кормления
+            if hour < 6:
+                next_time = local_now.replace(hour=6, minute=0, second=0, microsecond=0)
+            elif 12 <= hour < 18:
+                next_time = local_now.replace(hour=18, minute=0, second=0, microsecond=0)
+            else:
+                next_time = (local_now + timedelta(days=1)).replace(hour=6, minute=0, second=0, microsecond=0)
+                
+            delta_sec = (next_time - local_now).total_seconds()
+            remaining_h = int(delta_sec // 3600)
+            remaining_m = int((delta_sec % 3600) // 60)
+            time_str = f"{remaining_h} ч. {remaining_m} мин." if remaining_h > 0 else f"{remaining_m} мин."
+            
+            await message.answer(
+                f"😾 <b>Мяу! Сейчас не время для еды!</b>\n"
+                f"Я питаюсь по расписанию: <b>утром (с 06:00 до 12:00)</b> и <b>вечером (с 18:00 до 00:00)</b>.\n\n"
+                f"⏰ <b>До следующей кормёжки нужно подождать:</b> {time_str}",
+                parse_mode="HTML"
+            )
             return
 
-        # Повышаем статы
-        await update_cat_state(user_id, satiety=100, mood="отличное", last_satiety_update=datetime.now(timezone.utc).isoformat())
+        # 2. Проверяем, не кормили ли уже в текущее окно
+        last_feed_str = waifu.get("last_feed_time")
+        if last_feed_str:
+            try:
+                last_feed_dt = datetime.fromisoformat(last_feed_str)
+                if last_feed_dt.tzinfo is None:
+                    last_feed_dt = last_feed_dt.replace(tzinfo=timezone.utc)
+                
+                local_last_feed = last_feed_dt.astimezone()
+                
+                # Если кормёжка была сегодня
+                if local_last_feed.date() == local_now.date():
+                    last_hour = local_last_feed.hour
+                    last_was_morning = 6 <= last_hour < 12
+                    last_was_evening = 18 <= last_hour < 24
+                    
+                    if (is_morning and last_was_morning) or (is_evening and last_was_evening):
+                        # Уже кормили в это же окно
+                        if is_morning:
+                            next_time = local_now.replace(hour=18, minute=0, second=0, microsecond=0)
+                        else:
+                            next_time = (local_now + timedelta(days=1)).replace(hour=6, minute=0, second=0, microsecond=0)
+                            
+                        delta_sec = (next_time - local_now).total_seconds()
+                        remaining_h = int(delta_sec // 3600)
+                        remaining_m = int((delta_sec % 3600) // 60)
+                        time_str = f"{remaining_h} ч. {remaining_m} мин." if remaining_h > 0 else f"{remaining_m} мин."
+                        
+                        phrase = random.choice(_TOO_EARLY_PHRASES)
+                        await message.answer(
+                            f"{phrase}\n\n"
+                            f"⏰ <b>Я снова проголодаюсь через:</b> {time_str}",
+                            parse_mode="HTML"
+                        )
+                        return
+            except (ValueError, TypeError):
+                pass  # Если формат даты плохой — пропускаем проверку
+
+        # --- Проверяем наличие корма ---
+        hebao = await get_hebao_items(user_id)
+        korm_item = next((i for i in hebao if i["item_key"] == "korm_waifu"), None)
+        korm_qty = korm_item["quantity"] if korm_item else 0
+
+        if korm_qty <= 0:
+            await message.answer(
+                f"😿 {cat_name}: «Хозяин, корм закончился... Мяу...»\n"
+                "У вас нет корма для кошко-жены!"
+            )
+            return
+
+        # --- Тратим корм ---
+        await upsert_hebao_item(user_id, "korm_waifu", delta=-1)
+        korm_left = korm_qty - 1
+
+        # --- Повышаем статы ---
+        now_iso = now.isoformat()
+        await update_cat_state(
+            user_id,
+            satiety=100,
+            mood="отличное",
+            last_satiety_update=now_iso,
+            last_feed_time=now_iso,
+        )
         await update_waifu_trust(user_id, 5)
-        
+
+        # Получаем актуальное доверие после обновления
+        waifu_updated = await get_waifu_by_user(user_id)
+        new_trust = (waifu_updated.get("trust") or 0) if waifu_updated else (waifu.get("trust") or 0) + 5
+        new_trust = min(100, new_trust)
+
         await message.answer(
-            f"✨ Вы дали {waifu['cat_name']} вкусный корм!\n"
-            "Сытость: 100%\n"
-            "Уровень доверия поднялся на 5! ❤️"
+            f"✨ {cat_name} с урчанием набросилась на корм — <b>вкусняшка!</b>\n\n"
+            f"🍽️ <b>Сытость:</b> 100%\n"
+            f"❤️ <b>Уровень доверия:</b> {new_trust}% (+5)\n"
+            f"🎒 <b>Осталось корма:</b> {korm_left} шт.",
+            parse_mode="HTML"
         )
     except Exception as e:
         logger.error(f"Ошибка в feed_waifu_korm: {e}")

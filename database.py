@@ -20,7 +20,10 @@ async def init_db() -> aiosqlite.Connection:
             _db.row_factory = aiosqlite.Row
             await _db.execute("PRAGMA foreign_keys = ON")
             await _db.execute("PRAGMA journal_mode = WAL")
-            logger.info(f"Глобальное соединение с БД {DB_NAME} установлено (WAL mode: ON).")
+            await _db.execute("PRAGMA synchronous = NORMAL")
+            await _db.execute("PRAGMA cache_size = -64000")
+            await _db.execute("PRAGMA temp_store = MEMORY")
+            logger.info(f"Глобальное соединение с БД {DB_NAME} установлено (WAL mode: ON, sync: NORMAL).")
         except Exception as e:
             logger.error(f"Ошибка инициализации БД: {e}")
             raise
@@ -65,10 +68,9 @@ async def _generic_update(table: str, where_col: str, where_val: any, **fields) 
         values.append(where_val)
         
         try:
-            cursor = await conn.cursor()
-            await cursor.execute(f"UPDATE {table} SET {set_clause} WHERE {where_col} = ?", tuple(values))
-            await conn.commit()
-            return cursor.rowcount > 0
+            async with conn.execute(f"UPDATE {table} SET {set_clause} WHERE {where_col} = ?", tuple(values)) as cursor:
+                await conn.commit()
+                return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"Ошибка при обновлении таблицы {table} [{where_col}={where_val}]: {e}")
             return False
@@ -98,7 +100,8 @@ async def create_table() -> None:
                     image_cats TEXT,
                     age_days INTEGER DEFAULT 1,
                     last_age_update TEXT,
-                    last_satiety_update TEXT
+                    last_satiety_update TEXT,
+                    last_feed_time TEXT
                 )''')
 
                 await cursor.execute('''
@@ -267,7 +270,8 @@ async def add_new_columns() -> None:
                     "age_days": "INTEGER DEFAULT 1",
                     "last_age_update": "TEXT",
                     "last_satiety_update": "TEXT",
-                    "trust": "INTEGER DEFAULT 0"
+                    "trust": "INTEGER DEFAULT 0",
+                    "last_feed_time": "TEXT"
                 }
 
                 for column_name, column_def in columns_waifu.items():
@@ -343,7 +347,8 @@ async def check_and_fix_waifu_constraint() -> None:
                         image_cats TEXT,
                         age_days INTEGER DEFAULT 1,
                         last_age_update TEXT,
-                        last_satiety_update TEXT
+                        last_satiety_update TEXT,
+                        last_feed_time TEXT
                     )
                 ''')
                 
@@ -352,13 +357,13 @@ async def check_and_fix_waifu_constraint() -> None:
                     INSERT INTO waifu_cat (
                         cats_id, user_id, cat_name, category_cats, date_cat, 
                         satiety, miska_risa, mood, image_cats, 
-                        age_days, last_age_update, last_satiety_update
+                        age_days, last_age_update, last_satiety_update, last_feed_time
                     )
                     SELECT 
                         cats_id, user_id, cat_name, 
                         CASE WHEN category_cats = 'loli' THEN 'kitten' ELSE category_cats END,
                         date_cat, satiety, miska_risa, mood, image_cats, 
-                        age_days, last_age_update, last_satiety_update
+                        age_days, last_age_update, last_satiety_update, last_feed_time
                     FROM waifu_cat_old
                 ''')
                 
@@ -522,6 +527,7 @@ def _waifu_row_to_dict(row: aiosqlite.Row | None) -> dict | None:
         "last_age_update": safe(9),
         "last_satiety_update": safe(10),
         "trust": safe(11, 0),
+        "last_feed_time": safe(12),
     }
 
 
@@ -585,7 +591,7 @@ async def get_waifu_by_user(user_id: int) -> dict | None:
             await cursor.execute(
                 """
                 SELECT cats_id, user_id, cat_name, category_cats, date_cat,
-                       satiety, mood, image_cats, age_days, last_age_update, last_satiety_update, trust
+                       satiety, mood, image_cats, age_days, last_age_update, last_satiety_update, trust, last_feed_time
                 FROM waifu_cat WHERE user_id = ?
                 """,
                 (user_id,),
@@ -608,7 +614,8 @@ async def update_cat_image(user_id: int, image_path: str) -> bool:
 
 
 async def update_cat_state(user_id: int, *, satiety: int | None = None,
-                    mood: str | None = None, last_satiety_update: str | None = None) -> bool:
+                    mood: str | None = None, last_satiety_update: str | None = None,
+                    last_feed_time: str | None = None) -> bool:
     """
     Универсальное обновление динамических полей кошко-жены.
     Обновляет только переданные параметры.
@@ -620,6 +627,8 @@ async def update_cat_state(user_id: int, *, satiety: int | None = None,
         fields["mood"] = mood
     if last_satiety_update is not None:
         fields["last_satiety_update"] = last_satiety_update
+    if last_feed_time is not None:
+        fields["last_feed_time"] = last_feed_time
 
     return await _generic_update("waifu_cat", "user_id", user_id, **fields)
 
@@ -1221,33 +1230,39 @@ async def reset_all_rice_to_one() -> int:
 
         try:
             cursor = await conn.cursor()
+            now_iso = datetime.utcnow().isoformat()
+            
+            # Массово обновляем существующих граждан (у кого рис > 1) до 1 миски
+            await cursor.execute(
+                "UPDATE hebao_items SET quantity = 1, updated_at = ? WHERE item_key = 'miska_risa' AND quantity > 1",
+                (now_iso,)
+            )
+            updated_count = cursor.rowcount
+            if updated_count > 0:
+                logger.info(f"Сброшено сверх-лимитное количество риса у {updated_count} граждан.")
 
-            # Получаем всех граждан с рисом
-            await cursor.execute("SELECT user_id, quantity FROM hebao_items WHERE item_key = 'miska_risa' AND quantity > 1")
-            users_with_rice = await cursor.fetchall()
-
-            updated_count = 0
-            for user_id, current_quantity in users_with_rice:
-                # Обновляем до 1 миски
-                await cursor.execute(
-                    "UPDATE hebao_items SET quantity = 1, updated_at = ? WHERE user_id = ? AND item_key = 'miska_risa'",
-                    (datetime.utcnow().isoformat(), user_id)
-                )
-                if cursor.rowcount > 0:
-                    updated_count += 1
-                    logger.info(f"Пользователь {user_id}: рис сброшен с {current_quantity} до 1 миски")
-
-            # Добавляем 1 миску риса гражданам, у которых ее нет вообще
+            # Узнаем кому нужно выдать рис (у кого его вообще нет)
             await cursor.execute("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM hebao_items WHERE item_key = 'miska_risa')")
             users_without_rice = await cursor.fetchall()
 
+            new_entries = []
             for (user_id,) in users_without_rice:
-                await upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
-                updated_count += 1
-                logger.info(f"Пользователь {user_id}: добавлена 1 миска риса")
+                new_entries.append((user_id, "miska_risa", "миска риса", 1, now_iso))
+
+            if new_entries:
+                await cursor.executemany(
+                    """
+                    INSERT INTO hebao_items (user_id, item_key, item_name, quantity, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    new_entries
+                )
+                added_count = cursor.rowcount
+                updated_count += added_count
+                logger.info(f"Выдано по 1 миске риса {added_count} новым гражданам.")
 
             await conn.commit()
-            logger.info(f"Сброс риса завершен. Обновлено {updated_count} граждан")
+            logger.info(f"Сброс риса полностью завершен. Обновлено {updated_count} записей.")
 
             return updated_count
 
@@ -1269,22 +1284,23 @@ async def reset_all_ratings_to_default(default_rating: int = 100) -> int:
         try:
             cursor = await conn.cursor()
 
-            # Получаем всех граждан с текущим рейтингом
-            await cursor.execute("SELECT user_id, reputation FROM users")
+            # Массовое обновление (если отличается от дефолтного)
+            await cursor.execute(
+                "UPDATE users SET reputation = ? WHERE reputation != ? OR reputation IS NULL",
+                (default_rating, default_rating)
+            )
+            updated_count = cursor.rowcount
+            
+            # Массовая запись в лог
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            await cursor.execute("SELECT user_id FROM users")
             all_users = await cursor.fetchall()
-
-            updated_count = 0
-            for user_id, current_rating in all_users:
-                if current_rating != default_rating:
-                    await cursor.execute(
-                        "UPDATE users SET reputation = ? WHERE user_id = ?",
-                        (default_rating, user_id)
-                    )
-                    if cursor.rowcount > 0:
-                        updated_count += 1
-                        logger.info(f"Гражданин {user_id}: рейтинг сброшен с {current_rating} до {default_rating}")
-                        # Логируем сброс
-                        await _log_rating_history_cursor(conn, cursor, user_id, default_rating)
+            log_entries = [(uid[0], default_rating, now_str) for uid in all_users]
+            
+            await cursor.executemany(
+                "INSERT INTO rating_history (user_id, reputation, change_date) VALUES (?, ?, ?)",
+                log_entries
+            )
 
             await conn.commit()
             logger.info(f"Сброс рейтинга завершен. Обновлено {updated_count} граждан до {default_rating}")
