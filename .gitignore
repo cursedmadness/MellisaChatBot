@@ -7,12 +7,13 @@ __pycache__/
 
 # Files containing sensitive info
 .env
-*.session
-*.session-journal
+.env.local
+*.env
 
 # Database
 *.db
 *.sqlite3
+users.db*
 
 # Logs
 *.log

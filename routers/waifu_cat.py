@@ -27,6 +27,8 @@ from database import (
     clear_all_waifus,
     is_admin,
     delete_waifu_by_user,
+    can_receive_daily_food,
+    update_daily_food_time,
 )
 from routers.utils import (
     extract_user_from_text, resolve_user_id, get_user_link,
@@ -549,21 +551,32 @@ async def feed_waifu_korm(message: Message) -> None:
             except (ValueError, TypeError):
                 pass  # Если формат даты плохой — пропускаем проверку
 
-        # --- Проверяем наличие корма ---
+        # --- Проверяем наличие корма или риса ---
         hebao = await get_hebao_items(user_id)
         korm_item = next((i for i in hebao if i["item_key"] == "korm_waifu"), None)
         korm_qty = korm_item["quantity"] if korm_item else 0
+        
+        rice_item = next((i for i in hebao if i["item_key"] == "miska_risa"), None)
+        rice_qty = rice_item["quantity"] if rice_item else 0
 
-        if korm_qty <= 0:
+        if korm_qty <= 0 and rice_qty <= 0:
             await message.answer(
-                f"😿 {cat_name}: «Хозяин, корм закончился... Мяу...»\n"
-                "У вас нет корма для кошко-жены!"
+                f"😿 {cat_name}: «Хозяин, еда закончилась... Мяу...»\n"
+                "У вас нет корма или риса для кошко-жены!"
             )
             return
 
-        # --- Тратим корм ---
-        await upsert_hebao_item(user_id, "korm_waifu", delta=-1)
-        korm_left = korm_qty - 1
+        # --- Тратим еду ---
+        consumed_name = ""
+        left_qty = 0
+        if korm_qty > 0:
+            await upsert_hebao_item(user_id, "korm_waifu", delta=-1)
+            left_qty = korm_qty - 1
+            consumed_name = "корм"
+        else:
+            await upsert_hebao_item(user_id, "miska_risa", delta=-1)
+            left_qty = rice_qty - 1
+            consumed_name = "миска риса"
 
         # --- Повышаем статы ---
         now_iso = now.isoformat()
@@ -582,10 +595,10 @@ async def feed_waifu_korm(message: Message) -> None:
         new_trust = min(100, new_trust)
 
         await message.answer(
-            f"✨ {cat_name} с урчанием набросилась на корм — <b>вкусняшка!</b>\n\n"
+            f"✨ {cat_name} с урчанием набросилась на еду — <b>вкусняшка!</b>\n\n"
             f"🍽️ <b>Сытость:</b> 100%\n"
             f"❤️ <b>Уровень доверия:</b> {new_trust}% (+5)\n"
-            f"🎒 <b>Осталось корма:</b> {korm_left} шт.",
+            f"🎒 <b>Осталось ({consumed_name}):</b> {left_qty} шт.",
             parse_mode="HTML"
         )
     except Exception as e:
@@ -640,4 +653,40 @@ async def propose_handler(message: Message) -> None:
     except Exception as e:
         logger.error(f"Ошибка в propose_handler: {e}")
         await message.answer("Произошла ошибка при регистрации брака.")
+
+
+@waifu_cat_router.message(Command("get_food"))
+@waifu_cat_router.message(F.text.lower().in_(["получить корм", "взять корм"]))
+async def get_daily_food_command(message: Message) -> None:
+    """Команда для получения 5 корма или 5 риса (раз в день)."""
+    try:
+        user_id = message.from_user.id
+        
+        # Проверяем кулдаун
+        can_receive = await can_receive_daily_food(user_id)
+        if not can_receive:
+            await message.answer("🐾 Вы уже получали еду сегодня! Возвращайтесь завтра.")
+            return
+
+        # Рандом 50/50: 5 корма или 5 риса
+        item_key = "korm_waifu" if random.random() < 0.5 else "miska_risa"
+        item_name = "корм кошко-жены" if item_key == "korm_waifu" else "миска риса"
+        item_icon = "🥫" if item_key == "korm_waifu" else "🍚"
+
+        # Начисляем предметы
+        await upsert_hebao_item(user_id, item_key, item_name, delta=5)
+        
+        # Обновляем таймер
+        await update_daily_food_time(user_id)
+
+        await message.answer(
+            f"🎁 <b>Бесплатная еда получена!</b>\n\n"
+            f"Вы заглянули в кладовую и взяли:\n"
+            f"{item_icon} <b>{item_name}</b> (5 шт.)\n\n"
+            f"<i>Заглядывайте завтра за новой порцией!</i>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в get_daily_food_command: {e}")
+        await message.answer("Произошла ошибка при получении корма.")
 

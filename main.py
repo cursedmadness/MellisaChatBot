@@ -172,6 +172,41 @@ async def waifu_hunger_notifier_task(bot: Bot):
             logger.error(f"Ошибка в задаче уведомлений о голоде: {e}")
             await asyncio.sleep(60)
 
+async def waifu_random_rp_task(bot: Bot):
+    """Фоновая задача для рандомных RP сообщений от кошко-жены в течение дня."""
+    from routers.waifu_rp import generate_waifu_rp_message
+    
+    # Сначала немного подождем при старте (например 5 минут), чтобы не спамить сразу
+    await asyncio.sleep(300)
+    
+    while True:
+        try:
+            now_utc = datetime.now(timezone.utc)
+            # Приблизительное МСК (+3)
+            now_msk_hour = (now_utc.hour + 3) % 24
+            
+            # Отправляем только днём и вечером (с 10:00 до 22:00)
+            if 10 <= now_msk_hour < 22:
+                waifus = await get_all_waifus_with_owners()
+                for w in waifus:
+                    # Шанс 10% на каждый 1 час получить РП-милость (в среднем 1 сообщение в день-два)
+                    if random.random() < 0.10:
+                        user_id = w["user_id"]
+                        cat_name = w["cat_name"] or "кошко-жена"
+                        
+                        try:
+                            msg = await generate_waifu_rp_message(user_id, cat_name)
+                            await bot.send_message(user_id, msg, parse_mode="HTML")
+                            await asyncio.sleep(0.05)
+                        except Exception as e:
+                            logger.debug(f"Не удалось отправить RP сообщение {user_id}: {e}")
+            
+            # Спим час до следующей проверки
+            await asyncio.sleep(3600)
+        except Exception as e:
+            logger.error(f"Ошибка в задаче RP сообщений: {e}")
+            await asyncio.sleep(60)
+
 async def main():
     try:
         logger.info("Инициализация базы данных...")
@@ -196,7 +231,8 @@ async def main():
         asyncio.create_task(daily_report_task(bot)),
         asyncio.create_task(monthly_report_task(bot)),
         asyncio.create_task(waifu_greetings_task(bot)),
-        asyncio.create_task(waifu_hunger_notifier_task(bot))
+        asyncio.create_task(waifu_hunger_notifier_task(bot)),
+        asyncio.create_task(waifu_random_rp_task(bot))
     ]
 
     logger.info("Запуск бота MellisaChatBot...")

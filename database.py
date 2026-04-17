@@ -243,7 +243,8 @@ async def add_new_columns() -> None:
                     "reputation": "INTEGER DEFAULT 0",
                     "user_activity": "INTEGER DEFAULT 0",
                     "username": "TEXT",
-                    "city": "TEXT"
+                    "city": "TEXT",
+                    "last_food_received": "TEXT"
                 }
                 
                 for column_name, column_def in columns_users.items():
@@ -569,8 +570,8 @@ async def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category
             )
 
             # Выдаём 1 миску риса и 3 корма кошко-жены (korm_waifu)
-            await upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
-            await upsert_hebao_item(user_id, "korm_waifu", "корм кошко-жены", set_value=3)
+            await upsert_hebao_item(user_id, "miska_risa", "миска риса", delta=1)
+            await upsert_hebao_item(user_id, "korm_waifu", "корм кошко-жены", delta=3)
             await conn.commit()
             
             logger.info(f"Кошка успешно создана для пользователя {user_id}, выдана 1 миска риса")
@@ -831,6 +832,31 @@ async def add_user(user_id: int, nickname: str, username: str | None = None) -> 
             await conn.commit()
         except Error as e:
             logger.error(f"Ошибка при добавлении гражданина {user_id}: {e}")
+
+async def can_receive_daily_food(user_id: int) -> bool:
+    """Проверяет, может ли гражданин получить ежедневный корм (раз в день по UTC)."""
+    async with await create_connection() as conn:
+        if not conn:
+            return False
+        try:
+            cursor = await conn.cursor()
+            await cursor.execute("SELECT last_food_received FROM users WHERE user_id = ?", (user_id,))
+            row = await cursor.fetchone()
+            if not row or not row[0]:
+                return True
+            
+            last_date_str = row[0]
+            last_date = datetime.fromisoformat(last_date_str).date()
+            return datetime.utcnow().date() > last_date
+        except Exception as e:
+            logger.error(f"Ошибка проверки last_food_received: {e}")
+            return False
+
+async def update_daily_food_time(user_id: int) -> bool:
+    """Обновляет время получения ежедневного корма на текущее."""
+    now_iso = datetime.utcnow().isoformat()
+    return await _generic_update("users", "user_id", user_id, last_food_received=now_iso)
+
 
 async def get_user_nickname(user_id: int) -> str | None:
     """Получает ник гражданина."""
@@ -1361,8 +1387,8 @@ async def process_daily_rice_distribution() -> int:
         try:
             cursor = await conn.cursor()
 
-            # Получаем всех граждан
-            await cursor.execute("SELECT user_id FROM users")
+            # Получаем только граждан с кошко-женами
+            await cursor.execute("SELECT user_id FROM waifu_cat")
             all_users = await cursor.fetchall()
 
             distributed_count = 0
