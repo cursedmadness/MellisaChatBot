@@ -11,8 +11,8 @@ hebao_router = Router()
 
 def get_hebao_icon(item_key: str) -> str:
     icons = {
-        "miska_risa": "🍚",
-        "korm_waifu": "🥫",
+        "Миска риса": "🍚",
+        "Корм для вайфу": "🥫",
     }
     return icons.get(item_key, "📦")
 
@@ -20,8 +20,8 @@ def _format_hebao_message(user_id: int, user_display: str, items: list[dict], is
     valid_items = [i for i in items if i.get("quantity", 0) > 0]
     
     if is_own:
-        header = "🎒 <b>Твой Хэбао:</b>\n"
-        empty_msg = "🎒 <b>Твой Хэбао пуст...</b>\n\n<i>Здесь пока ничего нет.</i>"
+        header = "🎒 <b>Твой хэбао:</b>\n"
+        empty_msg = "🎒 <b>Твой хэбао пуст...</b>\n\n<i>Здесь пока ничего нет.</i>"
     else:
         user_link = f"<a href='tg://user?id={user_id}'>{user_display}</a>"
         header = f"🎒 <b>Хэбао гражданина {user_link}:</b>\n"
