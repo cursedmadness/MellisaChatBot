@@ -9,23 +9,24 @@ from routers.utils import extract_target_user, resolve_user_id, get_user_display
 logger = logging.getLogger(__name__)
 hebao_router = Router()
 
-def get_hebao_icon(item_key: str) -> str:
-    icons = {
-        "Миска риса": "🍚",
-        "Корм для вайфу": "🥫",
+def get_item_info(item_key: str) -> tuple[str, str]:
+    """Возвращает (Иконка, Красивое название) для предмета."""
+    mapping = {
+        "miska_risa": ("🍚", "Миска риса"),
+        "korm_waifu": ("🥫", "Корм для кошко-жены"),
     }
-    return icons.get(item_key, "📦")
+    return mapping.get(item_key, ("📦", item_key.replace("_", " ").capitalize()))
 
 def _format_hebao_message(user_id: int, user_display: str, items: list[dict], is_own: bool = True) -> str:
     valid_items = [i for i in items if i.get("quantity", 0) > 0]
     
     if is_own:
-        header = "🎒 <b>Твой хэбао:</b>\n"
-        empty_msg = "🎒 <b>Твой хэбао пуст...</b>\n\n<i>Здесь пока ничего нет.</i>"
+        header = "🎒 <b>У тебя в хэбао есть:</b>\n"
+        empty_msg = "🎒 <b>У тебя в хэбао пусто.</b>"
     else:
         user_link = f"<a href='tg://user?id={user_id}'>{user_display}</a>"
-        header = f"🎒 <b>Хэбао гражданина {user_link}:</b>\n"
-        empty_msg = f"🎒 <b>Хэбао гражданина {user_link} пуст.</b>\n\n<i>У него пока ничего нет.</i>"
+        header = f"🎒 <b>У {user_link} в хэбао есть:</b>\n"
+        empty_msg = f"🎒 <b>У {user_link} в хэбао пусто.</b>"
 
     if not valid_items:
         return empty_msg
@@ -34,11 +35,18 @@ def _format_hebao_message(user_id: int, user_display: str, items: list[dict], is
     for item in valid_items:
         qty = item.get("quantity", 0)
         item_key = item.get("item_key", "")
-        name = item.get("item_name") or item_key
-        name = str(name).capitalize()
+        item_name_db = item.get("item_name")
         
-        icon = get_hebao_icon(item_key)
-        lines.append(f"  {icon} <b>{name}</b>: {qty} шт.")
+        icon, pretty_name = get_item_info(item_key)
+        
+        # Если в БД есть нормальное название (не ключ), используем его
+        display_name = item_name_db or pretty_name
+        display_name = display_name.capitalize()
+        
+        if display_name.lower() == item_key.lower():
+            display_name = pretty_name
+
+        lines.append(f"  {icon} <b>{display_name}</b> ({qty})")
         
     return "\n".join(lines)
 
