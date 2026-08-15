@@ -25,3 +25,6 @@ Thumbs.db
 
 # Local docs
 DEPLOY.md
+
+# Utility scripts (not part of bot)
+utils/
