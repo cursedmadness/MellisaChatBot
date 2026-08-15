@@ -493,12 +493,18 @@ async def rename_cat(message: Message, command: CommandObject = None) -> None:
 FEED_COOLDOWN_HOURS = 3  # Минимальный интервал между кормлениями
 
 # Шуточные фразы, когда кошка ещё не голодна
-_TOO_EARLY_PHRASES = [
-    "Мяу? Хозяин, я только что поела! Подожди немного, хорошо? 😾 Напомню, когда снова захочу кушать~",
+_TOO_EARLY_PHRASES_JUST_FED = [
+    "Мяу? Хозяин, я только что поела! Подожди немного, хорошо? 😾",
     "*смотрит на миску, потом на тебя* Хозяин, ты меня что, откармливать собрался? Ещё рано! 🐾",
     "Мур-мур... Я благодарна, но я ещё сыта! Скоро сама дам знать, когда пора за стол~ 🍽️",
     "Нет-нет-нет! Кошки не едят когда попало, мы существа с расписанием! Подожди, хозяин 😤",
-    "*отворачивает морду от миски* Спасибо, но рано. Я напомню, когда придёт время~ 🌸",
+]
+
+_TOO_EARLY_PHRASES_SOON = [
+    "Мяу~ Хозяин, я скоро захочу кушать, но ещё не сейчас! 🐱",
+    "*потягивается* Почти время перекуса, но надо немного подождать~ 🌸",
+    "Скоро-скоро, хозяин! Терпение — добродетель кошек 😸",
+    "*мурлычет* Ещё чуть-чуть, и я буду готова к вкусняшкам! 🍽️",
 ]
 
 
@@ -551,9 +557,14 @@ async def feed_waifu_korm(message: Message) -> None:
 
         from datetime import timedelta
 
+        # Применяем декремент сытости
+        await _apply_satiety_decay(waifu)
+        current_satiety = waifu.get("satiety") or 0
+
         # Проверяем кулдаун (минимум 3 часа между кормлениями)
+        # ИСКЛЮЧЕНИЕ: если сытость критически низкая (< 15%), кулдаун игнорируется
         last_feed_str = waifu.get("last_feed_time")
-        if last_feed_str:
+        if last_feed_str and current_satiety >= 15:
             try:
                 last_feed_dt = datetime.fromisoformat(last_feed_str)
                 if last_feed_dt.tzinfo is None:
@@ -571,7 +582,12 @@ async def feed_waifu_korm(message: Message) -> None:
                         else f"{remaining_m} мин."
                     )
 
-                    phrase = random.choice(_TOO_EARLY_PHRASES)
+                    # Выбираем фразу в зависимости от оставшегося времени
+                    if remaining_hours > 1.5:
+                        phrase = random.choice(_TOO_EARLY_PHRASES_JUST_FED)
+                    else:
+                        phrase = random.choice(_TOO_EARLY_PHRASES_SOON)
+
                     await message.answer(
                         f"{phrase}\n\n⏰ <b>Я снова проголодаюсь через:</b> {time_str}",
                         parse_mode="HTML",
