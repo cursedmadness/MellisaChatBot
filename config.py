@@ -1,6 +1,7 @@
 """
 Конфигурационный файл для бота
 """
+
 import os
 from typing import Set
 from dotenv import load_dotenv
@@ -25,13 +26,16 @@ STATS_LEADERBOARD_LIMIT = 15  # Количество участников в к�
 STATS_ENABLED_CHATS: Set[int] = {
     -1002059485061,
     -1003079876973,
-    -1002709445496
+    -1002709445496,
 }  # ID чатов для сбора статистики активности
 
 # Настройки администраторов
 # Настройки администраторов. Загружаются из переменной ADMIN_IDS (через запятую)
-_admin_ids_str = os.getenv('ADMIN_IDS', '')
-ADMIN_IDS = [int(i.strip()) for i in _admin_ids_str.split(',') if i.strip().isdigit()]
+_admin_ids_str = os.getenv("ADMIN_IDS", "")
+ADMIN_IDS = [int(i.strip()) for i in _admin_ids_str.split(",") if i.strip().isdigit()]
+
+# Чат для уведомлений о запуске/остановке бота (опционально)
+DEV_CHAT_ID = int(os.getenv("DEV_CHAT_ID", "0")) or None
 
 # Настройки базы данных
 DB_NAME = "users.db"  # Имя файла базы данных
@@ -41,13 +45,13 @@ LOG_LEVEL = "INFO"  # Уровень логирования
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"  # Формат логов
 
 # Настройки бота
-BOT_TOKEN = os.getenv('TOKEN')  # Токен бота из переменной окружения
+BOT_TOKEN = os.getenv("TOKEN")  # Токен бота из переменной окружения
 PARSE_MODE = "HTML"  # Режим парсинга сообщений
 LINK_PREVIEW_DISABLED = True  # Отключить превью ссылок
 
 # Pyrogram настройки для модерации (получить на https://my.telegram.org/)
-API_ID = os.getenv('API_ID')
-API_HASH = os.getenv('API_HASH')
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
 
 # Настройки кормления кошки
 SATISFACTION_DECAY_HOURS = 5  # Часы до уменьшения сытости

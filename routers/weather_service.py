@@ -1,4 +1,5 @@
 import aiohttp
+import asyncio
 import logging
 import os
 from dotenv import load_dotenv
@@ -8,6 +9,26 @@ load_dotenv()
 OWM_API_KEY = os.getenv("OWM_API_KEY")
 
 logger = logging.getLogger(__name__)
+
+# Глобальная сессия для переиспользования соединений
+_weather_session: aiohttp.ClientSession | None = None
+
+
+async def get_weather_session() -> aiohttp.ClientSession:
+    """Возвращает глобальную aiohttp сессию для погодных запросов."""
+    global _weather_session
+    if _weather_session is None or _weather_session.closed:
+        timeout = aiohttp.ClientTimeout(total=10)
+        _weather_session = aiohttp.ClientSession(timeout=timeout)
+    return _weather_session
+
+
+async def close_weather_session():
+    """Закрывает глобальную сессию погодных запросов."""
+    global _weather_session
+    if _weather_session and not _weather_session.closed:
+        await _weather_session.close()
+        _weather_session = None
 
 
 async def get_coordinates(city_name: str):
@@ -24,18 +45,22 @@ async def get_coordinates(city_name: str):
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data:
-                        return data[0]["lat"], data[0]["lon"]
-                    else:
-                        logger.warning(f"Город '{city_name}' не найден")
+        session = await get_weather_session()
+        async with session.get(url, params=params) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data:
+                    return data[0]["lat"], data[0]["lon"]
                 else:
-                    logger.error(f"Ошибка Геокодера OWM: {response.status}")
+                    logger.warning(f"Город '{city_name}' не найден")
+            else:
+                logger.error(f"Ошибка Геокодера OWM: {response.status}")
+    except asyncio.TimeoutError:
+        logger.error(f"Таймаут запроса к Геокодеру OWM для города '{city_name}'")
+    except aiohttp.ClientError as e:
+        logger.error(f"Ошибка сети при запросе к Геокодеру OWM: {e}")
     except Exception as e:
-        logger.error(f"Ошибка при запросе к Геокодеру OWM: {e}")
+        logger.error(f"Неожиданная ошибка при запросе к Геокодеру OWM: {e}")
 
     return None, None
 
@@ -56,19 +81,25 @@ async def get_weather(lat: float, lon: float):
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    logger.error(f"Ошибка OpenWeatherMap: {response.status}")
+        session = await get_weather_session()
+        async with session.get(url, params=params) as response:
+            if response.status == 200:
+                return await response.json()
+            else:
+                logger.error(f"Ошибка OpenWeatherMap: {response.status}")
+    except asyncio.TimeoutError:
+        logger.error(f"Таймаут запроса к OpenWeatherMap для координат ({lat}, {lon})")
+    except aiohttp.ClientError as e:
+        logger.error(f"Ошибка сети при запросе к OpenWeatherMap: {e}")
     except Exception as e:
-        logger.error(f"Ошибка при запросе к OpenWeatherMap: {e}")
+        logger.error(f"Неожиданная ошибка при запросе к OpenWeatherMap: {e}")
 
     return None
 
 
-def format_weather_message(weather_data: dict, city_name: str = "", concise: bool = False) -> str:
+def format_weather_message(
+    weather_data: dict, city_name: str = "", concise: bool = False
+) -> str:
     """Форматирует данные о погоде в красивую строку."""
     try:
         temp = round(weather_data["main"]["temp"])
@@ -128,7 +159,9 @@ def format_weather_message(weather_data: dict, city_name: str = "", concise: boo
             temp_emoji = "🥶"
 
         city_display = city_name.capitalize() if city_name else "вашем городе"
-        header = f"🏛 Исходя из погодных сводок Партии погода в городе <b>{city_display}</b>:"
+        header = (
+            f"🏛 Исходя из погодных сводок Партии погода в городе <b>{city_display}</b>:"
+        )
 
         if concise:
             return (
@@ -155,5 +188,7 @@ async def get_weather_string(city_name: str, concise: bool = False) -> str:
     if lat is not None:
         weather_data = await get_weather(lat, lon)
         if weather_data:
-            return format_weather_message(weather_data, city_name=city_name, concise=concise)
+            return format_weather_message(
+                weather_data, city_name=city_name, concise=concise
+            )
     return ""
