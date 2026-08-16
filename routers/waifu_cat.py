@@ -655,7 +655,7 @@ async def feed_waifu_korm(message: Message) -> None:
         if satiety_bonus > 0:
             bonus_text = f"\n✨ <b>Бонус за кормление {time_period}:</b> +{satiety_bonus}% сытости, +{trust_bonus} доверия!"
         else:
-            bonus_text = f"\n💡 <i>Совет: кормите {cat_name} утром (6:00-12:00) или вечером (18:00-00:00) для максимального эффекта!</i>"
+            bonus_text = f"\n💡 <i>Подсказка: кормление утром (6:00-12:00) или вечером (18:00-00:00) даёт больше бонусов!</i>"
 
         await message.answer(
             f"✨ {cat_name} с урчанием набросилась на еду — <b>вкусняшка!</b>\n\n"

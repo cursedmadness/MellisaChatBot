@@ -204,8 +204,15 @@ async def waifu_hunger_notifier_task(bot: Bot):
 
                 await _apply_satiety_decay(w)
 
+                # Перечитываем актуальные данные из БД после обновления
+                from database import get_waifu_by_user
+
+                waifu_fresh = await get_waifu_by_user(user_id)
+                if not waifu_fresh:
+                    continue
+
                 # Отправляем уведомление в зависимости от уровня сытости
-                current_satiety = w.get("satiety") or 0
+                current_satiety = waifu_fresh.get("satiety") or 0
 
                 if current_satiety < 15:
                     # Критический голод
