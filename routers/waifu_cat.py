@@ -21,15 +21,21 @@ from database import (
     get_user_by_username,
     get_user_rice_count,
     upsert_hebao_item,
+    get_hebao_items,
     get_user_rate,
     get_all_waifus_with_owners,
     clear_all_waifus,
     is_admin,
     delete_waifu_by_user,
+    can_receive_daily_food,
+    update_daily_food_time,
 )
 from routers.utils import (
-    extract_user_from_text, resolve_user_id, get_user_link,
-    format_iso_date, format_count
+    extract_user_from_text,
+    resolve_user_id,
+    get_user_link,
+    format_iso_date,
+    format_count,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,22 +73,28 @@ def _format_waifu_profile(waifu: dict) -> str:
         else:
             return "милфа-кошка"
 
-    hunger_line = (
-        "Сейчас я не хочу есть" if satiety >= 60 else "Сейчас я голодна"
-    )
+    hunger_line = "Сейчас я не хочу есть" if satiety >= 60 else "Сейчас я голодна"
 
     trust = waifu.get("trust") or 0
-    
-    marriage_text = "💍 Состоит в браке с хозяином" if waifu.get("is_married") else "Холост/Не замужем"
 
-    days_together_str = format_count(days_together, 'день', 'дня', 'дней') if isinstance(days_together, int) else "?"
+    marriage_text = (
+        "💍 Состоит в браке с хозяином"
+        if waifu.get("is_married")
+        else "Холост/Не замужем"
+    )
+
+    days_together_str = (
+        format_count(days_together, "день", "дня", "дней")
+        if isinstance(days_together, int)
+        else "?"
+    )
 
     return (
         f"Мяу, хозяин.\n\n"
         f"Меня зовут {cat_name}, я {display_category(age_days)}\n"
-        f"Я рядом с тобой с {format_iso_date(date_cat)},прошло всего {days_together_str}\n"
+        f"Я с тобой с {format_iso_date(date_cat)} — уже {days_together_str}!\n"
         f"Мой возраст: {format_count(age_days, 'день', 'дня', 'дней')}\n"
-        f"Наш уровень доверия: {trust}% \n"
+        f"Наш уровень доверия: {trust}%\n"
         f"{marriage_text}\n\n"
         f"{hunger_line}, поэтому моё настроение {mood}\n"
         f"Если тебе интересно, что ещё можно со мной сделать — <i>ссылка на гайд</i>"
@@ -99,7 +111,9 @@ def _pick_default_image() -> str | None:
     if not os.path.isdir(folder):
         return None
     files = [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
-    image_files = [f for f in files if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+    image_files = [
+        f for f in files if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+    ]
     if not image_files:
         return None
     chosen = random.choice(image_files)
@@ -124,7 +138,9 @@ async def _apply_satiety_decay(waifu: dict) -> bool:
     try:
         last_update_str = waifu.get("last_satiety_update")
         try:
-            last_dt = datetime.fromisoformat(last_update_str) if last_update_str else None
+            last_dt = (
+                datetime.fromisoformat(last_update_str) if last_update_str else None
+            )
             if last_dt and last_dt.tzinfo is None:
                 last_dt = last_dt.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
@@ -135,11 +151,11 @@ async def _apply_satiety_decay(waifu: dict) -> bool:
 
         now = datetime.now(timezone.utc)
         age_days = waifu.get("age_days") or 1
-        
+
         # Базовый интервал — 5 часов. Каждые 30 дней возраста добавляют 1 час к интервалу.
         # Максимум замедляем до 12 часов.
         interval_hours = min(12, 5 + (age_days // 30))
-        
+
         hours = (now - last_dt).total_seconds() // 3600
         steps = int(hours // interval_hours)
         if steps <= 0:
@@ -163,7 +179,9 @@ async def _apply_satiety_decay(waifu: dict) -> bool:
 
 
 @waifu_cat_router.message(Command("my_cat"))
-@waifu_cat_router.message(F.text.lower().in_(["моя кошка", "моя кошкожена", "мой котёнок"]))
+@waifu_cat_router.message(
+    F.text.lower().in_(["моя кошка", "моя кошкожена", "мой котёнок"])
+)
 async def show_my_cat(message: Message) -> None:
     """
     Показывает информацию о своей кошко-жене.
@@ -182,7 +200,7 @@ async def show_my_cat(message: Message) -> None:
 
         # Декремент сытости по времени
         await _apply_satiety_decay(waifu)
-        
+
         # Проверяем брак
         marriage = await get_marriage(target_id)
         waifu["is_married"] = marriage is not None
@@ -201,7 +219,9 @@ async def show_my_cat(message: Message) -> None:
             now = datetime.now(timezone.utc)
             last_update_str = waifu.get("last_age_update")
             try:
-                last_dt = datetime.fromisoformat(last_update_str) if last_update_str else None
+                last_dt = (
+                    datetime.fromisoformat(last_update_str) if last_update_str else None
+                )
                 if last_dt and last_dt.tzinfo is None:
                     last_dt = last_dt.replace(tzinfo=timezone.utc)
             except (ValueError, TypeError):
@@ -240,9 +260,11 @@ async def abandon_waifu_request(message: Message) -> None:
     try:
         user_id = message.from_user.id
         waifu = await get_waifu_by_user(user_id)
-        
+
         if not waifu:
-            await message.answer("У вас нет кошко-жены, от которой можно было бы отказаться.")
+            await message.answer(
+                "У вас нет кошко-жены, от которой можно было бы отказаться."
+            )
             return
 
         await message.reply(
@@ -253,7 +275,9 @@ async def abandon_waifu_request(message: Message) -> None:
         )
     except Exception as e:
         logger.error(f"Ошибка в abandon_waifu_request: {e}")
-        await message.answer("Произошла ошибка при обработке запроса. Попробуйте позже.")
+        await message.answer(
+            "Произошла ошибка при обработке запроса. Попробуйте позже."
+        )
 
 
 @waifu_cat_router.message(F.reply_to_message & F.text.lower() == "точно отказываюсь")
@@ -261,13 +285,16 @@ async def abandon_waifu_confirm(message: Message) -> None:
     """Подтверждение отказа от кошко-жены через reply."""
     try:
         user_id = message.from_user.id
-        
+
         # Проверяем, что это ответ именно на сообщение бота (опционально, но желательно)
         if not message.reply_to_message.from_user.is_bot:
             return
 
         # Проверяем, что в сообщении бота было слово "отказаться" (чтобы не сработало на любой реплай)
-        if not message.reply_to_message.text or "отказаться" not in message.reply_to_message.text.lower():
+        if (
+            not message.reply_to_message.text
+            or "отказаться" not in message.reply_to_message.text.lower()
+        ):
             return
 
         deleted = await delete_waifu_by_user(user_id)
@@ -276,7 +303,9 @@ async def abandon_waifu_confirm(message: Message) -> None:
                 "💔 Ваша кошко-жена грустно мяукнула на прощание и ушла... Теперь вы снова один."
             )
         else:
-            await message.answer("Техническая ошибка: не удалось удалить запись. Возможно, у вас уже нет жены.")
+            await message.answer(
+                "Техническая ошибка: не удалось удалить запись. Возможно, у вас уже нет жены."
+            )
     except Exception as e:
         logger.error(f"Ошибка в abandon_waifu_confirm: {e}")
         await message.answer("Произошла ошибка при подтверждении. Попробуйте позже.")
@@ -300,7 +329,7 @@ async def show_all_waifus_command(message: Message) -> None:
             # Пытаемся получить имя или ссылку
             owner_name = w.get("nickname") or w.get("username") or str(w.get("user_id"))
             owner_link = get_user_link(w["user_id"], owner_name)
-            
+
             # Определяем статус по возрасту
             age = w.get("age_days", 0)
             if age <= 30:
@@ -309,7 +338,7 @@ async def show_all_waifus_command(message: Message) -> None:
                 status = "кошка-студентка"
             else:
                 status = "милфа-кошка"
-                
+
             text += f"• {owner_link} — {w.get('cat_name', 'без имени')} — {age} дн. ({status})\n"
 
         await message.answer(text)
@@ -327,13 +356,19 @@ async def clear_waifus_command(message: Message) -> None:
             return
 
         count = await clear_all_waifus()
-        await message.answer(f"✅ База данных очищена. Удалено {count} записей о женах.")
+        await message.answer(
+            f"✅ База данных очищена. Удалено {count} записей о женах."
+        )
     except Exception as e:
         logger.error(f"Ошибка в clear_waifus_command: {e}")
         await message.answer("Ошибка при очистке базы.")
 
 
-@waifu_cat_router.message(F.text.lower().func(lambda t: t.startswith("кошка ") and ("@" in t or "https://" in t)))
+@waifu_cat_router.message(
+    F.text.lower().func(
+        lambda t: t.startswith("кошка ") and ("@" in t or "https://" in t)
+    )
+)
 async def show_user_cat(message: Message, command: CommandObject = None) -> None:
     """
     Показывает информацию о кошко-жене другого пользователя.
@@ -356,7 +391,9 @@ async def show_user_cat(message: Message, command: CommandObject = None) -> None
 
             target_id = await resolve_user_id(mention_part)
             if not target_id:
-                await message.answer(f"Не удалось найти гражданина '{mention_part}' в системе.")
+                await message.answer(
+                    f"Не удалось найти гражданина '{mention_part}' в системе."
+                )
                 return
 
         waifu = await get_waifu_by_user(target_id)
@@ -365,7 +402,7 @@ async def show_user_cat(message: Message, command: CommandObject = None) -> None
             return
 
         await _apply_satiety_decay(waifu)
-        
+
         marriage = await get_marriage(target_id)
         waifu["is_married"] = marriage is not None
 
@@ -382,7 +419,9 @@ async def show_user_cat(message: Message, command: CommandObject = None) -> None
             now = datetime.now(timezone.utc)
             last_update_str = waifu.get("last_age_update")
             try:
-                last_dt = datetime.fromisoformat(last_update_str) if last_update_str else None
+                last_dt = (
+                    datetime.fromisoformat(last_update_str) if last_update_str else None
+                )
                 if last_dt and last_dt.tzinfo is None:
                     last_dt = last_dt.replace(tzinfo=timezone.utc)
             except (ValueError, TypeError):
@@ -423,11 +462,11 @@ async def rename_cat(message: Message, command: CommandObject = None) -> None:
     """
     try:
         user_id = message.from_user.id
-        
+
         if command and command.args:
             new_name = command.args.strip()
         elif message.text and message.text.lower().startswith("изменить кличку"):
-            new_name = message.text[len("изменить кличку"):].strip()
+            new_name = message.text[len("изменить кличку") :].strip()
         else:
             await message.answer("Укажи новую кличку. Пример: Изменить кличку Луна")
             return
@@ -451,11 +490,57 @@ async def rename_cat(message: Message, command: CommandObject = None) -> None:
         await message.answer("Произошла ошибка при смене клички.")
 
 
+FEED_COOLDOWN_HOURS = 3  # Минимальный интервал между кормлениями
+
+# Шуточные фразы, когда кошка ещё не голодна
+_TOO_EARLY_PHRASES_JUST_FED = [
+    "Мяу? Хозяин, я только что поела! Подожди немного, хорошо? 😾",
+    "*смотрит на миску, потом на тебя* Хозяин, ты меня что, откармливать собрался? Ещё рано! 🐾",
+    "Мур-мур... Я благодарна, но я ещё сыта! Скоро сама дам знать, когда пора за стол~ 🍽️",
+    "Нет-нет-нет! Кошки не едят когда попало, мы существа с расписанием! Подожди, хозяин 😤",
+]
+
+_TOO_EARLY_PHRASES_SOON = [
+    "Мяу~ Хозяин, я скоро захочу кушать, но ещё не сейчас! 🐱",
+    "*потягивается* Почти время перекуса, но надо немного подождать~ 🌸",
+    "Скоро-скоро, хозяин! Терпение — добродетель кошек 😸",
+    "*мурлычет* Ещё чуть-чуть, и я буду готова к вкусняшкам! 🍽️",
+]
+
+
+def _get_feeding_bonus(hour: int) -> tuple[int, str]:
+    """
+    Возвращает бонус к сытости в зависимости от времени суток.
+
+    - Утро (6-12): +20 бонус → сытость 100
+    - Вечер (18-24): +20 бонус → сытость 100
+    - День/Ночь (остальное): 0 бонус → сытость 80
+
+    Returns:
+        (bonus, time_period_name)
+    """
+    if 6 <= hour < 12:
+        return 20, "утром"
+    elif 18 <= hour < 24:
+        return 20, "вечером"
+    else:
+        return 0, "днём"
+
 
 @waifu_cat_router.message(Command("feed_korm"))
-@waifu_cat_router.message(F.text.lower().in_(["дать корм", "покормить кормом", "вкусняшка"]))
+@waifu_cat_router.message(
+    F.text.lower().in_(["дать корм", "покормить кормом", "вкусняшка"])
+)
 async def feed_waifu_korm(message: Message) -> None:
-    """Кормление специальным кормом: сытость 100 + доверие +5."""
+    """
+    Кормление кормом или рисом.
+
+    Новая механика:
+    - Можно кормить в любое время суток
+    - Утром (6-12) и вечером (18-24): сытость восстанавливается до 100 + доверие +5
+    - В другое время: сытость восстанавливается до 80 + доверие +3
+    - Минимальный интервал между кормлениями: 3 часа
+    """
     try:
         user_id = message.from_user.id
         waifu = await get_waifu_by_user(user_id)
@@ -463,20 +548,122 @@ async def feed_waifu_korm(message: Message) -> None:
             await message.answer("У тебя пока нет кошко-жены.")
             return
 
-        # Тратим корм
-        used = await upsert_hebao_item(user_id, "korm_waifu", delta=-1)
-        if not used:
-            await message.answer("У вас нет корма для кошко-жены. 😿")
+        cat_name = waifu.get("cat_name") or "мяу"
+        now = datetime.now(timezone.utc)
+
+        # Определяем локальное время для расчета бонусов
+        local_now = now.astimezone()
+        hour = local_now.hour
+
+        from datetime import timedelta
+
+        # Применяем декремент сытости
+        await _apply_satiety_decay(waifu)
+        current_satiety = waifu.get("satiety") or 0
+
+        # Проверяем кулдаун (минимум 3 часа между кормлениями)
+        # ИСКЛЮЧЕНИЕ: если сытость критически низкая (< 15%), кулдаун игнорируется
+        last_feed_str = waifu.get("last_feed_time")
+        if last_feed_str and current_satiety >= 15:
+            try:
+                last_feed_dt = datetime.fromisoformat(last_feed_str)
+                if last_feed_dt.tzinfo is None:
+                    last_feed_dt = last_feed_dt.replace(tzinfo=timezone.utc)
+
+                time_since_feed = (now - last_feed_dt).total_seconds() / 3600  # в часах
+
+                if time_since_feed < FEED_COOLDOWN_HOURS:
+                    remaining_hours = FEED_COOLDOWN_HOURS - time_since_feed
+                    remaining_h = int(remaining_hours)
+                    remaining_m = int((remaining_hours - remaining_h) * 60)
+                    time_str = (
+                        f"{remaining_h} ч. {remaining_m} мин."
+                        if remaining_h > 0
+                        else f"{remaining_m} мин."
+                    )
+
+                    # Выбираем фразу в зависимости от оставшегося времени
+                    if remaining_hours > 1.5:
+                        phrase = random.choice(_TOO_EARLY_PHRASES_JUST_FED)
+                    else:
+                        phrase = random.choice(_TOO_EARLY_PHRASES_SOON)
+
+                    await message.answer(
+                        f"{phrase}\n\n⏰ <b>Я снова проголодаюсь через:</b> {time_str}",
+                        parse_mode="HTML",
+                    )
+                    return
+            except (ValueError, TypeError):
+                pass  # Если формат даты плохой — пропускаем проверку
+
+        # --- Проверяем наличие корма или риса ---
+        hebao = await get_hebao_items(user_id)
+        korm_item = next((i for i in hebao if i["item_key"] == "korm_waifu"), None)
+        korm_qty = korm_item["quantity"] if korm_item else 0
+
+        rice_item = next((i for i in hebao if i["item_key"] == "miska_risa"), None)
+        rice_qty = rice_item["quantity"] if rice_item else 0
+
+        if korm_qty <= 0 and rice_qty <= 0:
+            await message.answer(
+                f"😿 {cat_name}: «Хозяин, еда закончилась... Мяу...»\n"
+                "У вас нет корма или риса для кошко-жены!"
+            )
             return
 
-        # Повышаем статы
-        await update_cat_state(user_id, satiety=100, mood="отличное", last_satiety_update=datetime.now(timezone.utc).isoformat())
-        await update_waifu_trust(user_id, 5)
-        
+        # --- Тратим еду ---
+        consumed_name = ""
+        left_qty = 0
+        if korm_qty > 0:
+            await upsert_hebao_item(user_id, "korm_waifu", delta=-1)
+            left_qty = korm_qty - 1
+            consumed_name = "корм"
+        else:
+            await upsert_hebao_item(user_id, "miska_risa", delta=-1)
+            left_qty = rice_qty - 1
+            consumed_name = "миска риса"
+
+        # --- Рассчитываем бонусы по времени суток ---
+        satiety_bonus, time_period = _get_feeding_bonus(hour)
+        base_satiety = 80
+        final_satiety = min(100, base_satiety + satiety_bonus)
+
+        trust_bonus = 5 if satiety_bonus > 0 else 3
+
+        # --- Повышаем статы ---
+        now_iso = now.isoformat()
+        await update_cat_state(
+            user_id,
+            satiety=final_satiety,
+            mood=_compute_mood(final_satiety),
+            last_satiety_update=now_iso,
+            last_feed_time=now_iso,
+        )
+        await update_waifu_trust(user_id, trust_bonus)
+
+        # Получаем актуальное доверие после обновления
+        waifu_updated = await get_waifu_by_user(user_id)
+        new_trust = (
+            (waifu_updated.get("trust") or 0)
+            if waifu_updated
+            else (waifu.get("trust") or 0) + trust_bonus
+        )
+        new_trust = min(100, new_trust)
+
+        # --- Формируем сообщение ---
+        bonus_text = ""
+        if satiety_bonus > 0:
+            bonus_text = f"\n✨ <b>Бонус за кормление {time_period}:</b> +{satiety_bonus}% сытости, +{trust_bonus} доверия!"
+        else:
+            bonus_text = f"\n💡 <i>Подсказка: кормление утром (6:00-12:00) или вечером (18:00-00:00) даёт больше бонусов!</i>"
+
         await message.answer(
-            f"✨ Вы дали {waifu['cat_name']} вкусный корм!\n"
-            "Сытость: 100%\n"
-            "Уровень доверия поднялся на 5! ❤️"
+            f"✨ {cat_name} с урчанием набросилась на еду — <b>вкусняшка!</b>\n\n"
+            f"🍽️ <b>Сытость:</b> {final_satiety}%\n"
+            f"❤️ <b>Уровень доверия:</b> {new_trust}% (+{trust_bonus})\n"
+            f"🎒 <b>Осталось ({consumed_name}):</b> {left_qty} шт."
+            f"{bonus_text}",
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.error(f"Ошибка в feed_waifu_korm: {e}")
@@ -484,33 +671,41 @@ async def feed_waifu_korm(message: Message) -> None:
 
 
 @waifu_cat_router.message(Command("propose"))
-@waifu_cat_router.message(F.text.lower().in_(["сделать предложение", "выйди за меня", "стань моей женой"]))
+@waifu_cat_router.message(
+    F.text.lower().in_(["сделать предложение", "выйди за меня", "стань моей женой"])
+)
 async def propose_handler(message: Message) -> None:
     """Команда предложения брака."""
     try:
         user_id = message.from_user.id
         waifu = await get_waifu_by_user(user_id)
-        
+
         if not waifu:
-            await message.answer("У вас нет кошко-жены, кому вы хотите сделать предложение? 🧐")
+            await message.answer(
+                "У вас нет кошко-жены, кому вы хотите сделать предложение? 🧐"
+            )
             return
 
         # Проверяем, не женаты ли уже
         marriage = await get_marriage(user_id)
         if marriage:
-            await message.answer(f"Вы уже состоите в официальном браке с {waifu.get('cat_name', 'кошечкой')}! 💞")
+            await message.answer(
+                f"Вы уже состоите в официальном браке с {waifu.get('cat_name', 'кошечкой')}! 💞"
+            )
             return
 
         trust = waifu.get("trust") or 0
         cat_name = waifu.get("cat_name") or "кошечка"
-        
-        await message.answer(f"💖 Вы встаете на одно колено и протягиваете кольцо {cat_name}...")
-        await asyncio.sleep(2) # Драматическая пауза
-        
+
+        await message.answer(
+            f"💖 Вы встаете на одно колено и протягиваете кольцо {cat_name}..."
+        )
+        await asyncio.sleep(2)  # Драматическая пауза
+
         # Шанс успеха = trust (минимум 5%, максимум 100%)
         chance = max(5, trust)
         roll = random.randint(1, 100)
-        
+
         if roll <= chance:
             # Успех!
             await register_marriage(user_id, waifu["cats_id"])
@@ -524,10 +719,47 @@ async def propose_handler(message: Message) -> None:
             refusal_phrases = [
                 f"{cat_name} смущенно отводит взгляд: «Извини, хозяин, я еще не готова к такому серьезному шагу...» 😿",
                 f"«Мяу... Ты очень добр ко мне, но нам нужно узнать друг друга получше», — ответила {cat_name}. 🐾",
-                f"{cat_name} хитро улыбнулась: «Моё сердце еще не полностью принадлежит тебе, постарайся получше!» 🎀"
+                f"{cat_name} хитро улыбнулась: «Моё сердце еще не полностью принадлежит тебе, постарайся получше!» 🎀",
             ]
             await message.answer(random.choice(refusal_phrases))
     except Exception as e:
         logger.error(f"Ошибка в propose_handler: {e}")
         await message.answer("Произошла ошибка при регистрации брака.")
 
+
+@waifu_cat_router.message(Command("get_food"))
+@waifu_cat_router.message(F.text.lower().in_(["получить корм", "взять корм"]))
+async def get_daily_food_command(message: Message) -> None:
+    """Команда для получения 5 корма или 5 риса (раз в день)."""
+    try:
+        user_id = message.from_user.id
+
+        # Проверяем кулдаун
+        can_receive = await can_receive_daily_food(user_id)
+        if not can_receive:
+            await message.answer(
+                "🐾 Вы уже получали еду сегодня! Возвращайтесь завтра."
+            )
+            return
+
+        # Рандом 50/50: 5 корма или 5 риса
+        item_key = "korm_waifu" if random.random() < 0.5 else "miska_risa"
+        item_name = "корм кошко-жены" if item_key == "korm_waifu" else "миска риса"
+        item_icon = "🥫" if item_key == "korm_waifu" else "🍚"
+
+        # Начисляем предметы
+        await upsert_hebao_item(user_id, item_key, item_name, delta=5)
+
+        # Обновляем таймер
+        await update_daily_food_time(user_id)
+
+        await message.answer(
+            f"🎁 <b>Бесплатная еда получена!</b>\n\n"
+            f"Вы заглянули в кладовую и взяли:\n"
+            f"{item_icon} <b>{item_name}</b> (5 шт.)\n\n"
+            f"<i>Заглядывайте завтра за новой порцией!</i>",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в get_daily_food_command: {e}")
+        await message.answer("Произошла ошибка при получении корма.")

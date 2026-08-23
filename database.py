@@ -1,6 +1,6 @@
 import aiosqlite
 from sqlite3 import Error
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 from config import MAX_RICE_PER_USER
@@ -11,6 +11,7 @@ DB_NAME = "users.db"  # Имя файла БД
 
 _db = None
 
+
 async def init_db() -> aiosqlite.Connection:
     """Инициализирует глобальное соединение с БД."""
     global _db
@@ -20,11 +21,17 @@ async def init_db() -> aiosqlite.Connection:
             _db.row_factory = aiosqlite.Row
             await _db.execute("PRAGMA foreign_keys = ON")
             await _db.execute("PRAGMA journal_mode = WAL")
-            logger.info(f"Глобальное соединение с БД {DB_NAME} установлено (WAL mode: ON).")
+            await _db.execute("PRAGMA synchronous = NORMAL")
+            await _db.execute("PRAGMA cache_size = -64000")
+            await _db.execute("PRAGMA temp_store = MEMORY")
+            logger.info(
+                f"Глобальное соединение с БД {DB_NAME} установлено (WAL mode: ON, sync: NORMAL)."
+            )
         except Exception as e:
             logger.error(f"Ошибка инициализации БД: {e}")
             raise
     return _db
+
 
 async def close_db() -> None:
     """Закрывает глобальное соединение с БД."""
@@ -34,44 +41,51 @@ async def close_db() -> None:
         _db = None
         logger.info("Глобальное соединение с БД закрыто.")
 
+
 class AsyncSQLiteContext:
-     def __init__(self, db):
-         self.db = db
+    def __init__(self, db):
+        self.db = db
 
-     async def __aenter__(self):
-         return self.db
+    async def __aenter__(self):
+        return self.db
 
-     async def __aexit__(self, exc_type, exc_val, exc_tb):
-         # Мы не закрываем глобальное соединение здесь.
-         pass
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        # Мы не закрываем глобальное соединение здесь.
+        pass
+
 
 async def create_connection() -> AsyncSQLiteContext:
-     """Возвращает контекстный менеджер для работы с глобальным соединением."""
-     if _db is None:
-         await init_db()
-     return AsyncSQLiteContext(_db)
+    """Возвращает контекстный менеджер для работы с глобальным соединением."""
+    if _db is None:
+        await init_db()
+    return AsyncSQLiteContext(_db)
+
 
 async def _generic_update(table: str, where_col: str, where_val: any, **fields) -> bool:
     """Универсальная функция для обновления полей в любой таблице."""
     if not fields:
         return False
-    
+
     async with await create_connection() as conn:
         if not conn:
             return False
-            
+
         set_clause = ", ".join([f"{k} = ?" for k in fields.keys()])
         values = list(fields.values())
         values.append(where_val)
-        
+
         try:
-            cursor = await conn.cursor()
-            await cursor.execute(f"UPDATE {table} SET {set_clause} WHERE {where_col} = ?", tuple(values))
-            await conn.commit()
-            return cursor.rowcount > 0
+            async with conn.execute(
+                f"UPDATE {table} SET {set_clause} WHERE {where_col} = ?", tuple(values)
+            ) as cursor:
+                await conn.commit()
+                return cursor.rowcount > 0
         except Exception as e:
-            logger.error(f"Ошибка при обновлении таблицы {table} [{where_col}={where_val}]: {e}")
+            logger.error(
+                f"Ошибка при обновлении таблицы {table} [{where_col}={where_val}]: {e}"
+            )
             return False
+
 
 async def create_table() -> None:
     """Создаёт таблицу users и admins и waifu_cats, если её нет."""
@@ -79,14 +93,14 @@ async def create_table() -> None:
         if conn:
             try:
                 cursor = await conn.cursor()
-                await cursor.execute('''
+                await cursor.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         user_id INTEGER PRIMARY KEY,
                         nickname TEXT,
                         username TEXT
                     )
-                 ''')
-                await cursor.execute('''CREATE TABLE IF NOT EXISTS waifu_cat (
+                 """)
+                await cursor.execute("""CREATE TABLE IF NOT EXISTS waifu_cat (
                     cats_id INTEGER PRIMARY KEY,
                     user_id INTEGER UNIQUE NOT NULL,
                     cat_name TEXT,
@@ -98,10 +112,11 @@ async def create_table() -> None:
                     image_cats TEXT,
                     age_days INTEGER DEFAULT 1,
                     last_age_update TEXT,
-                    last_satiety_update TEXT
-                )''')
+                    last_satiety_update TEXT,
+                    last_feed_time TEXT
+                )""")
 
-                await cursor.execute('''
+                await cursor.execute("""
                     CREATE TABLE IF NOT EXISTS marriages (
                         marriage_id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER UNIQUE NOT NULL,
@@ -110,9 +125,9 @@ async def create_table() -> None:
                         FOREIGN KEY (user_id) REFERENCES users(user_id),
                         FOREIGN KEY (cat_id) REFERENCES waifu_cat(cats_id)
                     )
-                ''')
+                """)
 
-                await cursor.execute('''
+                await cursor.execute("""
                     CREATE TABLE IF NOT EXISTS hebao_items (
                         item_id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER NOT NULL,
@@ -122,23 +137,35 @@ async def create_table() -> None:
                         updated_at TEXT,
                         UNIQUE(user_id, item_key)
                     )
-                ''')
+                """)
 
                 # Создаем индексы для оптимизации запросов
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_hebao_user_item ON hebao_items(user_id, item_key)')
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_hebao_quantity ON hebao_items(quantity)')
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)')
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_waifu_user ON waifu_cat(user_id)')
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_marriages_cat ON marriages(cat_id)')
-                
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_hebao_user_item ON hebao_items(user_id, item_key)"
+                )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_hebao_quantity ON hebao_items(quantity)"
+                )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"
+                )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_waifu_user ON waifu_cat(user_id)"
+                )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_marriages_cat ON marriages(cat_id)"
+                )
+
                 # Добавляем колонку для отслеживания последней ежедневной выдачи риса
                 try:
-                    await cursor.execute('ALTER TABLE hebao_items ADD COLUMN last_rice_given TEXT')
+                    await cursor.execute(
+                        "ALTER TABLE hebao_items ADD COLUMN last_rice_given TEXT"
+                    )
                 except (aiosqlite.OperationalError, Error):
                     # Колонка уже существует
                     pass
 
-                await cursor.execute('''
+                await cursor.execute("""
                     CREATE TABLE IF NOT EXISTS chat_rules (
                         chat_id INTEGER PRIMARY KEY,
                         rules_text TEXT NOT NULL,
@@ -147,18 +174,19 @@ async def create_table() -> None:
                         updated_by INTEGER,
                         updated_at TEXT
                     )
-                ''')
+                """)
 
-                await cursor.execute('''
+                await cursor.execute("""
                     CREATE TABLE IF NOT EXISTS admins (
                         user_id INTEGER PRIMARY KEY,
                         first_name TEXT
                     )
-                ''')
+                """)
                 await conn.commit()
                 logger.info("Проверка/создание таблиц выполнена.")
             except Error as e:
                 logger.error(f"Ошибка при создании таблиц: {e}")
+
 
 async def add_new_columns() -> None:
     """
@@ -174,7 +202,7 @@ async def add_new_columns() -> None:
 
                 # Создаем таблицы модерации, если они не существуют
                 # Таблица для предупреждений (варнов)
-                await cursor.execute('''
+                await cursor.execute("""
                     CREATE TABLE IF NOT EXISTS user_warnings (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER NOT NULL,
@@ -184,10 +212,10 @@ async def add_new_columns() -> None:
                         warned_at TEXT DEFAULT (datetime('now')),
                         UNIQUE(user_id, chat_id)
                     )
-                ''')
+                """)
 
                 # Таблица для активных наказаний
-                await cursor.execute('''
+                await cursor.execute("""
                     CREATE TABLE IF NOT EXISTS active_punishments (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER NOT NULL,
@@ -200,10 +228,10 @@ async def add_new_columns() -> None:
                         is_active INTEGER DEFAULT 1,
                         UNIQUE(user_id, chat_id, punishment_type)
                     )
-                ''')
+                """)
 
                 # Таблица истории наказаний
-                await cursor.execute('''
+                await cursor.execute("""
                     CREATE TABLE IF NOT EXISTS punishment_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER NOT NULL,
@@ -215,38 +243,51 @@ async def add_new_columns() -> None:
                         timestamp TEXT DEFAULT (datetime('now')),
                         duration_minutes INTEGER -- для временных наказаний
                     )
-                ''')
+                """)
 
                 # Создаем индексы для таблиц модерации
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_warnings_user_chat ON user_warnings(user_id, chat_id)')
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishments_user_chat ON active_punishments(user_id, chat_id)')
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishment_history_user ON punishment_history(user_id)')
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_punishment_history_timestamp ON punishment_history(timestamp)')
-                
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_warnings_user_chat ON user_warnings(user_id, chat_id)"
+                )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_punishments_user_chat ON active_punishments(user_id, chat_id)"
+                )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_punishment_history_user ON punishment_history(user_id)"
+                )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_punishment_history_timestamp ON punishment_history(timestamp)"
+                )
+
                 # Таблица истории рейтинга
-                await cursor.execute('''
+                await cursor.execute("""
                     CREATE TABLE IF NOT EXISTS rating_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER NOT NULL,
                         reputation INTEGER NOT NULL,
                         change_date TEXT DEFAULT (datetime('now', 'localtime'))
                     )
-                ''')
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_rating_history_user ON rating_history(user_id)')
-                
+                """)
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_rating_history_user ON rating_history(user_id)"
+                )
+
                 # Словарь: имя_столбца -> тип_данных_и_ограничения
                 columns_users = {
                     "description": "TEXT(25)",
                     "reputation": "INTEGER DEFAULT 0",
                     "user_activity": "INTEGER DEFAULT 0",
                     "username": "TEXT",
-                    "city": "TEXT"
+                    "city": "TEXT",
+                    "last_food_received": "TEXT",
                 }
-                
+
                 for column_name, column_def in columns_users.items():
                     try:
                         # Пытаемся добавить каждый столбец
-                        await cursor.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_def}")
+                        await cursor.execute(
+                            f"ALTER TABLE users ADD COLUMN {column_name} {column_def}"
+                        )
                         logger.info(f"Столбец '{column_name}' успешно добавлен.")
                     except aiosqlite.OperationalError as e:
                         # Если столбец уже существует, SQLite выдаст ошибку, которую мы перехватим
@@ -267,13 +308,18 @@ async def add_new_columns() -> None:
                     "age_days": "INTEGER DEFAULT 1",
                     "last_age_update": "TEXT",
                     "last_satiety_update": "TEXT",
-                    "trust": "INTEGER DEFAULT 0"
+                    "trust": "INTEGER DEFAULT 0",
+                    "last_feed_time": "TEXT",
                 }
 
                 for column_name, column_def in columns_waifu.items():
                     try:
-                        await cursor.execute(f"ALTER TABLE waifu_cat ADD COLUMN {column_name} {column_def}")
-                        logger.info(f"Столбец '{column_name}' успешно добавлен в waifu_cat.")
+                        await cursor.execute(
+                            f"ALTER TABLE waifu_cat ADD COLUMN {column_name} {column_def}"
+                        )
+                        logger.info(
+                            f"Столбец '{column_name}' успешно добавлен в waifu_cat."
+                        )
                     except aiosqlite.OperationalError as e:
                         if "duplicate column name" in str(e):
                             pass
@@ -282,21 +328,24 @@ async def add_new_columns() -> None:
 
                 # Добавляем столбец is_active для таблицы active_punishments
                 try:
-                    await cursor.execute("ALTER TABLE active_punishments ADD COLUMN is_active INTEGER DEFAULT 1")
-                    logger.info("Столбец 'is_active' успешно добавлен в active_punishments.")
+                    await cursor.execute(
+                        "ALTER TABLE active_punishments ADD COLUMN is_active INTEGER DEFAULT 1"
+                    )
+                    logger.info(
+                        "Столбец 'is_active' успешно добавлен в active_punishments."
+                    )
                 except aiosqlite.OperationalError as e:
-                     if "duplicate column name" in str(e):
-                         pass
-                     else:
-                         raise e
+                    if "duplicate column name" in str(e):
+                        pass
+                    else:
+                        raise e
 
                 await conn.commit()
             except Error as e:
                 logger.error(f"Произошла ошибка при добавлении столбцов: {e}")
-    
+
     # Запускаем миграцию constraints, если нужно
     await check_and_fix_waifu_constraint()
-
 
 
 async def check_and_fix_waifu_constraint() -> None:
@@ -310,27 +359,31 @@ async def check_and_fix_waifu_constraint() -> None:
 
         try:
             cursor = await conn.cursor()
-            
+
             # 1. Получаем SQL создания таблицы
-            await cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='waifu_cat'")
+            await cursor.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='waifu_cat'"
+            )
             row = await cursor.fetchone()
-            
+
             if not row:
                 return
-            
+
             create_sql = row[0]
-            
+
             # Если в определении есть 'loli', значит нужно мигрировать
             if "'loli'" in create_sql:
-                logger.info("Обнаружен устаревший CHECK constraint ('loli'). Начинаем миграцию...")
-                
+                logger.info(
+                    "Обнаружен устаревший CHECK constraint ('loli'). Начинаем миграцию..."
+                )
+
                 await cursor.execute("BEGIN TRANSACTION")
-                
+
                 # 2. Переименовываем старую таблицу
                 await cursor.execute("ALTER TABLE waifu_cat RENAME TO waifu_cat_old")
-                
+
                 # 3. Создаем новую таблицу с правильным constraint
-                await cursor.execute('''
+                await cursor.execute("""
                     CREATE TABLE waifu_cat (
                         cats_id INTEGER PRIMARY KEY,
                         user_id INTEGER UNIQUE NOT NULL,
@@ -343,37 +396,41 @@ async def check_and_fix_waifu_constraint() -> None:
                         image_cats TEXT,
                         age_days INTEGER DEFAULT 1,
                         last_age_update TEXT,
-                        last_satiety_update TEXT
+                        last_satiety_update TEXT,
+                        last_feed_time TEXT
                     )
-                ''')
-                
+                """)
+
                 # 4. Копируем данные, заменяя loli на kitten
-                await cursor.execute('''
+                await cursor.execute("""
                     INSERT INTO waifu_cat (
                         cats_id, user_id, cat_name, category_cats, date_cat, 
                         satiety, miska_risa, mood, image_cats, 
-                        age_days, last_age_update, last_satiety_update
+                        age_days, last_age_update, last_satiety_update, last_feed_time
                     )
                     SELECT 
                         cats_id, user_id, cat_name, 
                         CASE WHEN category_cats = 'loli' THEN 'kitten' ELSE category_cats END,
                         date_cat, satiety, miska_risa, mood, image_cats, 
-                        age_days, last_age_update, last_satiety_update
+                        age_days, last_age_update, last_satiety_update, last_feed_time
                     FROM waifu_cat_old
-                ''')
-                
+                """)
+
                 # 5. Удаляем старую таблицу
                 await cursor.execute("DROP TABLE waifu_cat_old")
-                
+
                 # 6. Восстанавливаем индекс
-                await cursor.execute('CREATE INDEX IF NOT EXISTS idx_waifu_user ON waifu_cat(user_id)')
-                
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_waifu_user ON waifu_cat(user_id)"
+                )
+
                 await conn.commit()
                 logger.info("Миграция waifu_cat успешно завершена: 'loli' -> 'kitten'")
-                
+
         except Exception as e:
             await conn.rollback()
             logger.error(f"Ошибка при миграции waifu_cat: {e}")
+
 
 def _hebao_row_to_dict(row: aiosqlite.Row | None) -> dict | None:
     if not row:
@@ -433,7 +490,7 @@ async def upsert_hebao_item(
 
         try:
             cursor = await conn.cursor()
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = datetime.now(timezone.utc).isoformat()
             display_name = item_name or item_key
 
             if set_value is not None:
@@ -501,11 +558,13 @@ async def get_hebao_overview(user_id: int, merge_waifu_rice: bool = True) -> lis
 
 # --- Функции для работы с waifu_cat ---
 
+
 def _waifu_row_to_dict(row: aiosqlite.Row | None) -> dict | None:
     if not row:
         return None
     # Поддержка старых схем: если нет новых колонок, подставляем значения по умолчанию
     row_len = len(row)
+
     def safe(idx, default=None):
         return row[idx] if row_len > idx else default
 
@@ -522,10 +581,16 @@ def _waifu_row_to_dict(row: aiosqlite.Row | None) -> dict | None:
         "last_age_update": safe(9),
         "last_satiety_update": safe(10),
         "trust": safe(11, 0),
+        "last_feed_time": safe(12),
     }
 
 
-async def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category: str = "kitten", mood: str = "отличное") -> bool:
+async def create_waifu_for_user(
+    user_id: int,
+    cat_name: str = "мяу",
+    category: str = "kitten",
+    mood: str = "отличное",
+) -> bool:
     """
     Создаёт запись кошко-жены для пользователя, если её ещё нет.
     Поле date_cat сохраняем в ISO-формате.
@@ -537,39 +602,58 @@ async def create_waifu_for_user(user_id: int, cat_name: str = "мяу", category
 
     async with await create_connection() as conn:
         if not conn:
-            logger.error(f"Не удалось подключиться к БД для создания кошки user_id={user_id}")
+            logger.error(
+                f"Не удалось подключиться к БД для создания кошки user_id={user_id}"
+            )
             return False
 
         try:
             cursor = await conn.cursor()
-            
+
             # Сначала проверяем, есть ли уже кошка
-            await cursor.execute("SELECT user_id FROM waifu_cat WHERE user_id = ?", (user_id,))
+            await cursor.execute(
+                "SELECT user_id FROM waifu_cat WHERE user_id = ?", (user_id,)
+            )
             existing = await cursor.fetchone()
-            
+
             if existing:
-                logger.info(f"У пользователя {user_id} уже есть кошка, создание пропущено")
+                logger.info(
+                    f"У пользователя {user_id} уже есть кошка, создание пропущено"
+                )
                 return False
-            
+
             # Кошки нет, создаём
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = datetime.now(timezone.utc).isoformat()
 
             await cursor.execute(
                 """
                 INSERT INTO waifu_cat (user_id, cat_name, category_cats, date_cat, age_days, last_age_update, mood, satiety, last_satiety_update, trust)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, cat_name, category, now_iso, 1, now_iso, mood, 100, now_iso, 5),
+                (
+                    user_id,
+                    cat_name,
+                    category,
+                    now_iso,
+                    1,
+                    now_iso,
+                    mood,
+                    100,
+                    now_iso,
+                    5,
+                ),
             )
 
             # Выдаём 1 миску риса и 3 корма кошко-жены (korm_waifu)
-            await upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
-            await upsert_hebao_item(user_id, "korm_waifu", "корм кошко-жены", set_value=3)
+            await upsert_hebao_item(user_id, "miska_risa", "миска риса", delta=1)
+            await upsert_hebao_item(user_id, "korm_waifu", "корм кошко-жены", delta=3)
             await conn.commit()
-            
-            logger.info(f"Кошка успешно создана для пользователя {user_id}, выдана 1 миска риса")
+
+            logger.info(
+                f"Кошка успешно создана для пользователя {user_id}, выдана 1 миска риса"
+            )
             return True
-            
+
         except Error as e:
             logger.error(f"Ошибка при создании кошки для user_id {user_id}: {e}")
             return False
@@ -585,7 +669,7 @@ async def get_waifu_by_user(user_id: int) -> dict | None:
             await cursor.execute(
                 """
                 SELECT cats_id, user_id, cat_name, category_cats, date_cat,
-                       satiety, mood, image_cats, age_days, last_age_update, last_satiety_update, trust
+                       satiety, mood, image_cats, age_days, last_age_update, last_satiety_update, trust, last_feed_time
                 FROM waifu_cat WHERE user_id = ?
                 """,
                 (user_id,),
@@ -607,8 +691,14 @@ async def update_cat_image(user_id: int, image_path: str) -> bool:
     return await _generic_update("waifu_cat", "user_id", user_id, image_cats=image_path)
 
 
-async def update_cat_state(user_id: int, *, satiety: int | None = None,
-                    mood: str | None = None, last_satiety_update: str | None = None) -> bool:
+async def update_cat_state(
+    user_id: int,
+    *,
+    satiety: int | None = None,
+    mood: str | None = None,
+    last_satiety_update: str | None = None,
+    last_feed_time: str | None = None,
+) -> bool:
     """
     Универсальное обновление динамических полей кошко-жены.
     Обновляет только переданные параметры.
@@ -620,6 +710,8 @@ async def update_cat_state(user_id: int, *, satiety: int | None = None,
         fields["mood"] = mood
     if last_satiety_update is not None:
         fields["last_satiety_update"] = last_satiety_update
+    if last_feed_time is not None:
+        fields["last_feed_time"] = last_feed_time
 
     return await _generic_update("waifu_cat", "user_id", user_id, **fields)
 
@@ -637,9 +729,11 @@ async def update_waifu_trust(user_id: int, delta: int) -> bool:
             row = await cursor.fetchone()
             if row is None:
                 return False
-            
+
             new_trust = max(0, min(100, row[0] + delta))
-            return await _generic_update("waifu_cat", "user_id", user_id, trust=new_trust)
+            return await _generic_update(
+                "waifu_cat", "user_id", user_id, trust=new_trust
+            )
         except Error as e:
             logger.error(f"Ошибка обновления доверия для user_id {user_id}: {e}")
             return False
@@ -677,7 +771,7 @@ async def register_marriage(user_id: int, cat_id: int) -> bool:
             return False
         try:
             cursor = await conn.cursor()
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = datetime.now(timezone.utc).isoformat()
             await cursor.execute(
                 "INSERT INTO marriages (user_id, cat_id, marriage_date) VALUES (?, ?, ?)",
                 (user_id, cat_id, now_iso),
@@ -699,8 +793,12 @@ async def update_waifu_age(user_id: int, new_age: int, last_update_iso: str) -> 
         new_category = "MILF"
 
     return await _generic_update(
-        "waifu_cat", "user_id", user_id, 
-        age_days=new_age, last_age_update=last_update_iso, category_cats=new_category
+        "waifu_cat",
+        "user_id",
+        user_id,
+        age_days=new_age,
+        last_age_update=last_update_iso,
+        category_cats=new_category,
     )
 
 
@@ -730,8 +828,9 @@ async def get_all_waifus_with_owners() -> list[dict]:
                     "category": row[2],
                     "age_days": row[3],
                     "nickname": row[4],
-                    "username": row[5]
-                } for row in rows
+                    "username": row[5],
+                }
+                for row in rows
             ]
         except Error as e:
             logger.error(f"Ошибка при получении списка всех кошек: {e}")
@@ -777,8 +876,10 @@ async def delete_waifu_by_user(user_id: int) -> bool:
         except Error as e:
             logger.error(f"Ошибка при удалении кошки для user_id {user_id}: {e}")
             return False
-            
+
+
 # --- ОСТАЛЬНЫЕ ВАШИ ФУНКЦИИ (без изменений) ---
+
 
 async def add_user(user_id: int, nickname: str, username: str | None = None) -> None:
     """
@@ -794,7 +895,9 @@ async def add_user(user_id: int, nickname: str, username: str | None = None) -> 
             cursor = await conn.cursor()
 
             # Проверяем, новый ли гражданин
-            await cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+            await cursor.execute(
+                "SELECT user_id FROM users WHERE user_id = ?", (user_id,)
+            )
             existing_user = await cursor.fetchone()
 
             if existing_user:
@@ -814,14 +917,49 @@ async def add_user(user_id: int, nickname: str, username: str | None = None) -> 
                 )
                 # Логируем начальный рейтинг 300
                 await _log_rating_history_cursor(conn, cursor, user_id, 300)
-                
+
                 # Выдаем 1 миску риса
-                await upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
-                logger.info(f"Новому гражданину {user_id} (@{username or 'нет'}) установлен рейтинг 300 и выдана 1 миска риса")
+                await upsert_hebao_item(
+                    user_id, "miska_risa", "миска риса", set_value=1
+                )
+                logger.info(
+                    f"Новому гражданину {user_id} (@{username or 'нет'}) установлен рейтинг 300 и выдана 1 миска риса"
+                )
 
             await conn.commit()
         except Error as e:
             logger.error(f"Ошибка при добавлении гражданина {user_id}: {e}")
+
+
+async def can_receive_daily_food(user_id: int) -> bool:
+    """Проверяет, может ли гражданин получить ежедневный корм (раз в день по UTC)."""
+    async with await create_connection() as conn:
+        if not conn:
+            return False
+        try:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT last_food_received FROM users WHERE user_id = ?", (user_id,)
+            )
+            row = await cursor.fetchone()
+            if not row or not row[0]:
+                return True
+
+            last_date_str = row[0]
+            last_date = datetime.fromisoformat(last_date_str).date()
+            return datetime.now(timezone.utc).date() > last_date
+        except Exception as e:
+            logger.error(f"Ошибка проверки last_food_received: {e}")
+            return False
+
+
+async def update_daily_food_time(user_id: int) -> bool:
+    """Обновляет время получения ежедневного корма на текущее."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return await _generic_update(
+        "users", "user_id", user_id, last_food_received=now_iso
+    )
+
 
 async def get_user_nickname(user_id: int) -> str | None:
     """Получает ник гражданина."""
@@ -830,16 +968,20 @@ async def get_user_nickname(user_id: int) -> str | None:
             return None
         try:
             cursor = await conn.cursor()
-            await cursor.execute("SELECT nickname FROM users WHERE user_id = ?", (user_id,))
+            await cursor.execute(
+                "SELECT nickname FROM users WHERE user_id = ?", (user_id,)
+            )
             result = await cursor.fetchone()
             return result[0] if result else None
         except Error as e:
             logger.error(f"Ошибка получения никнейма: {e}")
             return None
 
+
 async def set_user_nickname(user_id: int, nickname: str) -> bool:
     """Устанавливает ник гражданина."""
     return await _generic_update("users", "user_id", user_id, nickname=nickname)
+
 
 async def get_user_profile(user_id: int) -> dict | None:
     """Получает все данные гражданина для анкеты."""
@@ -849,10 +991,13 @@ async def get_user_profile(user_id: int) -> dict | None:
         try:
             cursor = await conn.cursor()
             # Выбираем все нужные поля одним запросом
-            await cursor.execute("""
+            await cursor.execute(
+                """
                 SELECT nickname, description, reputation, user_activity, city
                 FROM users WHERE user_id = ?
-            """, (user_id,))
+            """,
+                (user_id,),
+            )
             result = await cursor.fetchone()
             if result:
                 # Возвращаем данные в виде удобного словаря
@@ -861,7 +1006,7 @@ async def get_user_profile(user_id: int) -> dict | None:
                     "description": result[1],
                     "reputation": result[2],
                     "activity": result[3],
-                    "city": result[4]
+                    "city": result[4],
                 }
                 return profile_data
         except Error as e:
@@ -876,7 +1021,9 @@ async def get_user_by_username(username: str) -> int | None:
             return None
         try:
             cursor = await conn.cursor()
-            await cursor.execute("SELECT user_id FROM users WHERE username = ?", (username,))
+            await cursor.execute(
+                "SELECT user_id FROM users WHERE username = ?", (username,)
+            )
             result = await cursor.fetchone()
             return result[0] if result else None
         except Error as e:
@@ -895,16 +1042,20 @@ async def get_all_users() -> list[dict]:
 
         try:
             cursor = await conn.cursor()
-            await cursor.execute("SELECT user_id, nickname, username FROM users ORDER BY user_id")
+            await cursor.execute(
+                "SELECT user_id, nickname, username FROM users ORDER BY user_id"
+            )
             rows = await cursor.fetchall()
 
             users = []
             for row in rows:
-                users.append({
-                    "user_id": row[0],
-                    "nickname": row[1] or "нет",
-                    "username": row[2] or "нет"
-                })
+                users.append(
+                    {
+                        "user_id": row[0],
+                        "nickname": row[1] or "нет",
+                        "username": row[2] or "нет",
+                    }
+                )
 
             return users
 
@@ -940,22 +1091,30 @@ async def delete_user_completely(username: str) -> bool:
             cursor = await conn.cursor()
 
             # Удаляем из всех таблиц
-            tables_to_clean = ['hebao_items', 'waifu_cat', 'admins', 'users']
+            tables_to_clean = ["hebao_items", "waifu_cat", "admins", "users"]
             deleted_records = 0
 
             for table in tables_to_clean:
-                await cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+                await cursor.execute(
+                    f"DELETE FROM {table} WHERE user_id = ?", (user_id,)
+                )
                 deleted_records += cursor.rowcount
                 if cursor.rowcount > 0:
-                    logger.info(f"Удалено {cursor.rowcount} записей из таблицы {table} для гражданина @{username} (ID: {user_id})")
+                    logger.info(
+                        f"Удалено {cursor.rowcount} записей из таблицы {table} для гражданина @{username} (ID: {user_id})"
+                    )
 
             await conn.commit()
 
             if deleted_records > 0:
-                logger.info(f"Пользователь @{username} (ID: {user_id}) полностью удален из системы. Всего удалено {deleted_records} записей")
+                logger.info(
+                    f"Пользователь @{username} (ID: {user_id}) полностью удален из системы. Всего удалено {deleted_records} записей"
+                )
                 return True
             else:
-                logger.warning(f"Не найдено записей для удаления пользователя @{username} (ID: {user_id})")
+                logger.warning(
+                    f"Не найдено записей для удаления пользователя @{username} (ID: {user_id})"
+                )
                 return False
 
         except Error as e:
@@ -964,6 +1123,7 @@ async def delete_user_completely(username: str) -> bool:
 
 
 # --- Функции для работы с правилами чата ---
+
 
 async def save_chat_rules(chat_id: int, rules_text: str, user_id: int) -> bool:
     """
@@ -977,16 +1137,19 @@ async def save_chat_rules(chat_id: int, rules_text: str, user_id: int) -> bool:
 
         try:
             cursor = await conn.cursor()
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = datetime.now(timezone.utc).isoformat()
 
-            await cursor.execute('''
+            await cursor.execute(
+                """
                 INSERT INTO chat_rules (chat_id, rules_text, created_by, created_at, updated_by, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                     rules_text = excluded.rules_text,
                     updated_by = excluded.updated_by,
                     updated_at = excluded.updated_at
-            ''', (chat_id, rules_text, user_id, now_iso, user_id, now_iso))
+            """,
+                (chat_id, rules_text, user_id, now_iso, user_id, now_iso),
+            )
 
             await conn.commit()
             if cursor.rowcount > 0:
@@ -1011,7 +1174,9 @@ async def get_chat_rules(chat_id: int) -> str | None:
             return None
         try:
             cursor = await conn.cursor()
-            await cursor.execute("SELECT rules_text FROM chat_rules WHERE chat_id = ?", (chat_id,))
+            await cursor.execute(
+                "SELECT rules_text FROM chat_rules WHERE chat_id = ?", (chat_id,)
+            )
             result = await cursor.fetchone()
             return result[0] if result else None
         except Error as e:
@@ -1029,18 +1194,18 @@ async def get_chat_rules_info(chat_id: int) -> dict | None:
             return None
         try:
             cursor = await conn.cursor()
-            await cursor.execute("SELECT rules_text, created_by, updated_at FROM chat_rules WHERE chat_id = ?", (chat_id,))
+            await cursor.execute(
+                "SELECT rules_text, created_by, updated_at FROM chat_rules WHERE chat_id = ?",
+                (chat_id,),
+            )
             row = await cursor.fetchone()
             if row:
-                return {
-                    "rules_text": row[0],
-                    "user_id": row[1],
-                    "updated_at": row[2]
-                }
+                return {"rules_text": row[0], "user_id": row[1], "updated_at": row[2]}
             return None
         except Error as e:
             logger.error(f"Ошибка при получении инфо о правилах чата {chat_id}: {e}")
             return None
+
 
 async def delete_chat_rules(chat_id: int) -> bool:
     """
@@ -1062,6 +1227,7 @@ async def delete_chat_rules(chat_id: int) -> bool:
 
 # --- Функции для ежедневной выдачи риса ---
 
+
 async def cleanup_expired_punishments() -> tuple[int, list]:
     """
     Автоматически снимает истекшие наказания.
@@ -1072,26 +1238,27 @@ async def cleanup_expired_punishments() -> tuple[int, list]:
             return 0, []
         try:
             cursor = await conn.cursor()
-            now = datetime.utcnow().isoformat()
-            
+            now = datetime.now(timezone.utc).isoformat()
+
             # Получаем список тех, кого будем разбанивать/размучивать (для логов или уведомлений)
             await cursor.execute(
                 "SELECT user_id, chat_id, punishment_type FROM active_punishments WHERE expires_at IS NOT NULL AND expires_at <= ? AND is_active = 1",
-                (now,)
+                (now,),
             )
             expired = await cursor.fetchall()
-            
+
             if expired:
                 await cursor.execute(
                     "UPDATE active_punishments SET is_active = 0 WHERE expires_at IS NOT NULL AND expires_at <= ? AND is_active = 1",
-                    (now,)
+                    (now,),
                 )
                 await conn.commit()
-            
-            return len(expired), expired # Возвращаем кортеж с количеством и списком
+
+            return len(expired), expired  # Возвращаем кортеж с количеством и списком
         except Error as e:
             logger.error(f"Ошибка при очистке истекших наказаний: {e}")
             return 0, []
+
 
 async def get_all_banned_users(chat_id: int) -> list[dict]:
     """
@@ -1109,13 +1276,17 @@ async def get_all_banned_users(chat_id: int) -> list[dict]:
                 JOIN users u ON p.user_id = u.user_id
                 WHERE p.chat_id = ? AND p.punishment_type = 'ban' AND p.is_active = 1
                 """,
-                (chat_id,)
+                (chat_id,),
             )
             rows = await cursor.fetchall()
-            return [{"user_id": r[0], "nickname": r[1], "reason": r[2], "expires_at": r[3]} for r in rows]
+            return [
+                {"user_id": r[0], "nickname": r[1], "reason": r[2], "expires_at": r[3]}
+                for r in rows
+            ]
         except Error as e:
             logger.error(f"Ошибка при получении банлиста чата {chat_id}: {e}")
             return []
+
 
 async def get_last_punishment_details(user_id: int, p_type: str) -> dict | None:
     """
@@ -1134,7 +1305,7 @@ async def get_last_punishment_details(user_id: int, p_type: str) -> dict | None:
                 WHERE p.user_id = ? AND p.punishment_type = ? AND p.is_active = 1
                 ORDER BY p.id DESC LIMIT 1
                 """,
-                (user_id, p_type)
+                (user_id, p_type),
             )
             row = await cursor.fetchone()
             if row:
@@ -1142,7 +1313,7 @@ async def get_last_punishment_details(user_id: int, p_type: str) -> dict | None:
                     "reason": row[0],
                     "moderator_id": row[1],
                     "expires_at": row[2],
-                    "moderator_name": row[3] or f"ID:{row[1]}"
+                    "moderator_name": row[3] or f"ID:{row[1]}",
                 }
             return None
         except Error as e:
@@ -1163,13 +1334,15 @@ async def get_user_rice_count(user_id: int) -> int:
             cursor = await conn.cursor()
             await cursor.execute(
                 "SELECT quantity FROM hebao_items WHERE user_id = ? AND item_key = 'miska_risa'",
-                (user_id,)
+                (user_id,),
             )
             result = await cursor.fetchone()
             return result[0] if result else 0
 
         except Error as e:
-            logger.error(f"Ошибка при получении количества риса для user_id {user_id}: {e}")
+            logger.error(
+                f"Ошибка при получении количества риса для user_id {user_id}: {e}"
+            )
             return 0
 
 
@@ -1182,7 +1355,9 @@ async def give_daily_rice(user_id: int) -> bool:
     rice_count = await get_user_rice_count(user_id)
 
     if rice_count >= MAX_RICE_PER_USER:
-        logger.info(f"Пользователь {user_id} имеет {rice_count} мисок риса (>={MAX_RICE_PER_USER}), ежедневная выдача пропущена")
+        logger.info(
+            f"Пользователь {user_id} имеет {rice_count} мисок риса (>={MAX_RICE_PER_USER}), ежедневная выдача пропущена"
+        )
         return False
 
     # Выдаем 1 миску риса
@@ -1194,15 +1369,19 @@ async def give_daily_rice(user_id: int) -> bool:
             if conn:
                 try:
                     cursor = await conn.cursor()
-                    now_iso = datetime.utcnow().isoformat()
+                    now_iso = datetime.now(timezone.utc).isoformat()
                     await cursor.execute(
                         "UPDATE hebao_items SET last_rice_given = ? WHERE user_id = ? AND item_key = 'miska_risa'",
-                        (now_iso, user_id)
+                        (now_iso, user_id),
                     )
                     await conn.commit()
-                    logger.info(f"Пользователю {user_id} выдана 1 миска риса (было {rice_count}, стало {rice_count + 1})")
+                    logger.info(
+                        f"Пользователю {user_id} выдана 1 миска риса (было {rice_count}, стало {rice_count + 1})"
+                    )
                 except Error as e:
-                    logger.error(f"Ошибка обновления last_rice_given для user_id {user_id}: {e}")
+                    logger.error(
+                        f"Ошибка обновления last_rice_given для user_id {user_id}: {e}"
+                    )
 
         return True
 
@@ -1221,33 +1400,45 @@ async def reset_all_rice_to_one() -> int:
 
         try:
             cursor = await conn.cursor()
+            now_iso = datetime.now(timezone.utc).isoformat()
 
-            # Получаем всех граждан с рисом
-            await cursor.execute("SELECT user_id, quantity FROM hebao_items WHERE item_key = 'miska_risa' AND quantity > 1")
-            users_with_rice = await cursor.fetchall()
-
-            updated_count = 0
-            for user_id, current_quantity in users_with_rice:
-                # Обновляем до 1 миски
-                await cursor.execute(
-                    "UPDATE hebao_items SET quantity = 1, updated_at = ? WHERE user_id = ? AND item_key = 'miska_risa'",
-                    (datetime.utcnow().isoformat(), user_id)
+            # Массово обновляем существующих граждан (у кого рис > 1) до 1 миски
+            await cursor.execute(
+                "UPDATE hebao_items SET quantity = 1, updated_at = ? WHERE item_key = 'miska_risa' AND quantity > 1",
+                (now_iso,),
+            )
+            updated_count = cursor.rowcount
+            if updated_count > 0:
+                logger.info(
+                    f"Сброшено сверх-лимитное количество риса у {updated_count} граждан."
                 )
-                if cursor.rowcount > 0:
-                    updated_count += 1
-                    logger.info(f"Пользователь {user_id}: рис сброшен с {current_quantity} до 1 миски")
 
-            # Добавляем 1 миску риса гражданам, у которых ее нет вообще
-            await cursor.execute("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM hebao_items WHERE item_key = 'miska_risa')")
+            # Узнаем кому нужно выдать рис (у кого его вообще нет)
+            await cursor.execute(
+                "SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM hebao_items WHERE item_key = 'miska_risa')"
+            )
             users_without_rice = await cursor.fetchall()
 
+            new_entries = []
             for (user_id,) in users_without_rice:
-                await upsert_hebao_item(user_id, "miska_risa", "миска риса", set_value=1)
-                updated_count += 1
-                logger.info(f"Пользователь {user_id}: добавлена 1 миска риса")
+                new_entries.append((user_id, "miska_risa", "миска риса", 1, now_iso))
+
+            if new_entries:
+                await cursor.executemany(
+                    """
+                    INSERT INTO hebao_items (user_id, item_key, item_name, quantity, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    new_entries,
+                )
+                added_count = cursor.rowcount
+                updated_count += added_count
+                logger.info(f"Выдано по 1 миске риса {added_count} новым гражданам.")
 
             await conn.commit()
-            logger.info(f"Сброс риса завершен. Обновлено {updated_count} граждан")
+            logger.info(
+                f"Сброс риса полностью завершен. Обновлено {updated_count} записей."
+            )
 
             return updated_count
 
@@ -1269,25 +1460,28 @@ async def reset_all_ratings_to_default(default_rating: int = 100) -> int:
         try:
             cursor = await conn.cursor()
 
-            # Получаем всех граждан с текущим рейтингом
-            await cursor.execute("SELECT user_id, reputation FROM users")
-            all_users = await cursor.fetchall()
+            # Массовое обновление (если отличается от дефолтного)
+            await cursor.execute(
+                "UPDATE users SET reputation = ? WHERE reputation != ? OR reputation IS NULL",
+                (default_rating, default_rating),
+            )
+            updated_count = cursor.rowcount
 
-            updated_count = 0
-            for user_id, current_rating in all_users:
-                if current_rating != default_rating:
-                    await cursor.execute(
-                        "UPDATE users SET reputation = ? WHERE user_id = ?",
-                        (default_rating, user_id)
-                    )
-                    if cursor.rowcount > 0:
-                        updated_count += 1
-                        logger.info(f"Гражданин {user_id}: рейтинг сброшен с {current_rating} до {default_rating}")
-                        # Логируем сброс
-                        await _log_rating_history_cursor(conn, cursor, user_id, default_rating)
+            # Массовая запись в лог
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            await cursor.execute("SELECT user_id FROM users")
+            all_users = await cursor.fetchall()
+            log_entries = [(uid[0], default_rating, now_str) for uid in all_users]
+
+            await cursor.executemany(
+                "INSERT INTO rating_history (user_id, reputation, change_date) VALUES (?, ?, ?)",
+                log_entries,
+            )
 
             await conn.commit()
-            logger.info(f"Сброс рейтинга завершен. Обновлено {updated_count} граждан до {default_rating}")
+            logger.info(
+                f"Сброс рейтинга завершен. Обновлено {updated_count} граждан до {default_rating}"
+            )
 
             return updated_count
 
@@ -1313,14 +1507,16 @@ async def initialize_default_ratings(default_rating: int = 100) -> int:
             # Обновляем граждан, у которых рейтинг NULL или 0
             await cursor.execute(
                 "UPDATE users SET reputation = ? WHERE reputation IS NULL OR reputation = 0",
-                (default_rating,)
+                (default_rating,),
             )
 
             updated_count = cursor.rowcount
             await conn.commit()
 
             if updated_count > 0:
-                logger.info(f"Инициализация рейтинга завершена. Установлено {default_rating} рейтинга для {updated_count} граждан")
+                logger.info(
+                    f"Инициализация рейтинга завершена. Установлено {default_rating} рейтинга для {updated_count} граждан"
+                )
 
             return updated_count
 
@@ -1345,8 +1541,8 @@ async def process_daily_rice_distribution() -> int:
         try:
             cursor = await conn.cursor()
 
-            # Получаем всех граждан
-            await cursor.execute("SELECT user_id FROM users")
+            # Получаем только граждан с кошко-женами
+            await cursor.execute("SELECT user_id FROM waifu_cat")
             all_users = await cursor.fetchall()
 
             distributed_count = 0
@@ -1355,7 +1551,9 @@ async def process_daily_rice_distribution() -> int:
                 if await give_daily_rice(user_id):
                     distributed_count += 1
 
-            logger.info(f"Ежедневная выдача риса завершена. Выдано {distributed_count} гражданам")
+            logger.info(
+                f"Ежедневная выдача риса завершена. Выдано {distributed_count} гражданам"
+            )
             return distributed_count
 
         except Error as e:
@@ -1367,17 +1565,22 @@ async def set_user_description(user_id: int, description: str) -> bool:
     """Устанавливает или обновляет описание пользователя."""
     return await _generic_update("users", "user_id", user_id, description=description)
 
+
 async def add_admin(user_id: int, first_name: str) -> None:
     """Добавляет администратора в таблицу admins."""
     async with await create_connection() as conn:
         if conn:
             try:
                 cursor = await conn.cursor()
-                await cursor.execute("INSERT OR IGNORE INTO admins (user_id, first_name) VALUES (?, ?)", (user_id, first_name))
+                await cursor.execute(
+                    "INSERT OR IGNORE INTO admins (user_id, first_name) VALUES (?, ?)",
+                    (user_id, first_name),
+                )
                 await conn.commit()
                 logger.info(f"Администратор {user_id} добавлен с именем {first_name}")
             except Error as e:
                 logger.error(f"Ошибка при добавлении админа {user_id}: {e}")
+
 
 async def remove_admin(user_id: int) -> None:
     """Удаляет администратора из таблицы admins."""
@@ -1391,18 +1594,22 @@ async def remove_admin(user_id: int) -> None:
             except Error as e:
                 logger.error(f"Ошибка при удалении админа {user_id}: {e}")
 
+
 async def is_admin(user_id: int) -> bool:
     """Проверяет, является ли пользователь администратором."""
     async with await create_connection() as conn:
         if conn:
             try:
                 cursor = await conn.cursor()
-                await cursor.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
+                await cursor.execute(
+                    "SELECT user_id FROM admins WHERE user_id = ?", (user_id,)
+                )
                 result = await cursor.fetchone()
                 return bool(result)
             except Error as e:
                 logger.error(f"Ошибка при проверке прав админа {user_id}: {e}")
     return False
+
 
 async def get_all_admins() -> list[tuple[int, str]]:
     """Получает список всех администраторов (user_id и first_name)."""
@@ -1411,10 +1618,13 @@ async def get_all_admins() -> list[tuple[int, str]]:
             try:
                 cursor = await conn.cursor()
                 await cursor.execute("SELECT user_id, first_name FROM admins")
-                return await cursor.fetchall()  # Возвращает список кортежей [(user_id, first_name), ...]
+                return (
+                    await cursor.fetchall()
+                )  # Возвращает список кортежей [(user_id, first_name), ...]
             except Error as e:
                 logger.error(f"Ошибка при получении списка админов: {e}")
     return []
+
 
 async def initialize_admins(admin_ids: list[int]) -> None:
     """Инициализирует таблицу admins из списка ADMIN_IDS, если она пуста."""
@@ -1427,14 +1637,18 @@ async def initialize_admins(admin_ids: list[int]) -> None:
                 count = result[0]
                 if count == 0:
                     for user_id in admin_ids:
-                        await add_admin(user_id, "Администратор")  # Placeholder first_name; можно заменить на реальное через API
+                        await add_admin(
+                            user_id, "Администратор"
+                        )  # Placeholder first_name; можно заменить на реальное через API
                     logger.info("Таблица admins инициализирована из ADMIN_IDS")
             except Error as e:
                 logger.error(f"Ошибка при инициализации админов: {e}")
 
+
 async def set_user_city(user_id: int, city: str) -> bool:
     """Устанавливает или обновляет город пользователя."""
     return await _generic_update("users", "user_id", user_id, city=city)
+
 
 async def get_user_city(user_id: int) -> str | None:
     """Получает город пользователя из БД."""
@@ -1442,12 +1656,15 @@ async def get_user_city(user_id: int) -> str | None:
         if conn:
             try:
                 cursor = await conn.cursor()
-                await cursor.execute("SELECT city FROM users WHERE user_id = ?", (user_id,))
+                await cursor.execute(
+                    "SELECT city FROM users WHERE user_id = ?", (user_id,)
+                )
                 result = await cursor.fetchone()
                 return result[0] if result else None
             except Error as e:
                 logger.error(f"Ошибка при получении города для {user_id}: {e}")
     return None
+
 
 async def get_user_description(user_id: int) -> str | None:
     """Получает описание пользователя из БД."""
@@ -1455,7 +1672,9 @@ async def get_user_description(user_id: int) -> str | None:
         if conn:
             try:
                 cursor = await conn.cursor()
-                await cursor.execute("SELECT description FROM users WHERE user_id = ?", (user_id,))
+                await cursor.execute(
+                    "SELECT description FROM users WHERE user_id = ?", (user_id,)
+                )
                 result = await cursor.fetchone()
                 # Возвращаем описание (result[0]) если оно есть, иначе None
                 return result[0] if result else None
@@ -1463,18 +1682,22 @@ async def get_user_description(user_id: int) -> str | None:
                 logger.error(f"Ошибка при получении описания для {user_id}: {e}")
     return None
 
+
 async def get_user_rate(user_id: int) -> int:
     async with await create_connection() as conn:
         if not conn:
             return None
         try:
             cursor = await conn.cursor()
-            await cursor.execute('SELECT reputation FROM users WHERE user_id = ?', (user_id,))
+            await cursor.execute(
+                "SELECT reputation FROM users WHERE user_id = ?", (user_id,)
+            )
             result = await cursor.fetchone()
             return result[0] if result else None
         except Error as e:
             logger.error(f"Ошибка при получении рейтинга для {user_id}: {e}")
             return None
+
 
 async def get_user_rating_history(user_id: int) -> list[tuple[str, int]]:
     """
@@ -1488,13 +1711,14 @@ async def get_user_rating_history(user_id: int) -> list[tuple[str, int]]:
             cursor = await conn.cursor()
             await cursor.execute(
                 "SELECT change_date, reputation FROM rating_history WHERE user_id = ? ORDER BY change_date ASC",
-                (user_id,)
+                (user_id,),
             )
             rows = await cursor.fetchall()
             return [(r[0], r[1]) for r in rows]
         except Error as e:
             logger.error(f"Ошибка при получении истории рейтинга для {user_id}: {e}")
             return []
+
 
 async def _log_rating_history(user_id: int, rate: int) -> None:
     """Внутренняя функция для записи истории изменения рейтинга."""
@@ -1505,39 +1729,46 @@ async def _log_rating_history(user_id: int, rate: int) -> None:
                 await _log_rating_history_cursor(conn, cursor, user_id, rate)
                 await conn.commit()
             except Error as e:
-                logger.error(f"Ошибка при записи истории рейтинга пользователя {user_id}: {e}")
+                logger.error(
+                    f"Ошибка при записи истории рейтинга пользователя {user_id}: {e}"
+                )
+
 
 async def _log_rating_history_cursor(conn, cursor, user_id: int, rate: int) -> None:
     """Функция записи истории рейтинга с использованием переданного курсора для массовых операций."""
     try:
         await cursor.execute(
             "INSERT INTO rating_history (user_id, reputation, change_date) VALUES (?, ?, ?)",
-            (user_id, rate, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            (user_id, rate, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         )
     except Error as e:
         logger.error(f"Ошибка при записи истории рейтинга курсором {user_id}: {e}")
 
+
 async def update_user_rate(user_id: int, rate: int) -> bool:
     """
-    Обновляет рейтинг пользователя. 
+    Обновляет рейтинг пользователя.
     Если рейтинг достигает 500 и у пользователя нет кошки, она создается автоматически.
     Возвращает True, если была создана новая кошка.
     """
     success = await _generic_update("users", "user_id", user_id, reputation=rate)
     if not success:
         return False
-    
+
     # Логируем изменение
     await _log_rating_history(user_id, rate)
-    
+
     # После обновления рейтинга проверяем, нужно ли создать кошку
     if rate >= 500:
-        logger.info(f"Рейтинг {rate} >= 500, проверяем создание кошки для пользователя {user_id}")
+        logger.info(
+            f"Рейтинг {rate} >= 500, проверяем создание кошки для пользователя {user_id}"
+        )
         cat_created = await create_waifu_for_user(user_id)
         logger.info(f"Результат создания кошки для {user_id}: {cat_created}")
         return cat_created
-    
+
     return False
+
 
 async def unrate_user(user_id: int, rate: int) -> bool:
     """Сбрасывает рейтинг пользователя."""
@@ -1557,22 +1788,30 @@ async def increment_user_activity(user_id: int) -> bool:
         try:
             cursor = await conn.cursor()
             # Используем SQL для атомарного увеличения значения
-            await cursor.execute("""
+            await cursor.execute(
+                """
                 UPDATE users
                 SET user_activity = user_activity + 1
                 WHERE user_id = ?
-            """, (user_id,))
+            """,
+                (user_id,),
+            )
 
             if cursor.rowcount == 0:
                 # Гражданин не найден, создаем его
-                logger.warning(f"Гражданин {user_id} не найден при увеличении активности, создаем")
+                logger.warning(
+                    f"Гражданин {user_id} не найден при увеличении активности, создаем"
+                )
                 await add_user(user_id, "пользователь")
                 # Повторяем попытку
-                await cursor.execute("""
+                await cursor.execute(
+                    """
                     UPDATE users
                     SET user_activity = user_activity + 1
                     WHERE user_id = ?
-                """, (user_id,))
+                """,
+                    (user_id,),
+                )
 
             await conn.commit()
             return True
@@ -1580,6 +1819,7 @@ async def increment_user_activity(user_id: int) -> bool:
         except Error as e:
             logger.error(f"Ошибка при инкременте активности гражданина {user_id}: {e}")
             return False
+
 
 async def get_chat_leaderboard(limit: int = 10) -> list[aiosqlite.Row]:
     """Получает топ граждан по активности."""
@@ -1589,18 +1829,22 @@ async def get_chat_leaderboard(limit: int = 10) -> list[aiosqlite.Row]:
                 cursor = await conn.cursor()
                 # Выбираем ник и активность, сортируем по убыванию активности
                 # LIMIT ограничивает вывод, чтобы не спамить в чат
-                await cursor.execute("""
+                await cursor.execute(
+                    """
                     SELECT nickname, User_activity
                     FROM users
                     WHERE User_activity > 0
                     ORDER BY User_activity DESC
                     LIMIT ?
-                """, (limit,))
+                """,
+                    (limit,),
+                )
                 # Возвращаем список кортежей (ник, активность)
                 return await cursor.fetchall()
             except Error as e:
                 logger.error(f"Ошибка при получении лидерборда: {e}")
     return []
+
 
 async def get_highly_active_users(min_activity: int) -> list[tuple[int, str, int]]:
     """
@@ -1614,7 +1858,7 @@ async def get_highly_active_users(min_activity: int) -> list[tuple[int, str, int
             cursor = await conn.cursor()
             await cursor.execute(
                 "SELECT user_id, nickname, user_activity FROM users WHERE user_activity >= ?",
-                (min_activity,)
+                (min_activity,),
             )
             return await cursor.fetchall()
         except Error as e:
@@ -1626,7 +1870,9 @@ async def reset_daily_activity() -> bool:
     """Сбрасывает ежедневную активность всех граждан."""
     async with await create_connection() as conn:
         if not conn:
-            logger.error("Не удалось подключиться к БД для сброса ежедневной активности")
+            logger.error(
+                "Не удалось подключиться к БД для сброса ежедневной активности"
+            )
             return False
 
         try:
@@ -1650,6 +1896,7 @@ async def get_monthly_top(limit: int = 30) -> list[aiosqlite.Row]:
     # Пока что возвращаем общий топ, но в будущем можно добавить логику по месяцам
     return await get_chat_leaderboard(limit)
 
+
 async def get_rate_status(user_id: int) -> str:
     """Возвращает букву ранга рейтинга (S, A, B, C, D, F)"""
     rate = await get_user_rate(user_id) or 0
@@ -1668,7 +1915,10 @@ async def get_rate_status(user_id: int) -> str:
     else:
         return "N/A"
 
-async def get_users_by_rate_range(min_rate: int, max_rate: int | None = None) -> list[dict]:
+
+async def get_users_by_rate_range(
+    min_rate: int, max_rate: int | None = None
+) -> list[dict]:
     """
     Возвращает список пользователей, чей рейтинг находится в заданном диапазоне.
     Если max_rate не указан, берется все, что выше min_rate.
@@ -1681,18 +1931,23 @@ async def get_users_by_rate_range(min_rate: int, max_rate: int | None = None) ->
             if max_rate is not None:
                 await cursor.execute(
                     "SELECT user_id, nickname, reputation FROM users WHERE reputation >= ? AND reputation <= ? ORDER BY reputation DESC",
-                    (min_rate, max_rate)
+                    (min_rate, max_rate),
                 )
             else:
                 await cursor.execute(
                     "SELECT user_id, nickname, reputation FROM users WHERE reputation >= ? ORDER BY reputation DESC",
-                    (min_rate,)
+                    (min_rate,),
                 )
             rows = await cursor.fetchall()
-            return [{"user_id": r[0], "nickname": r[1], "reputation": r[2]} for r in rows]
+            return [
+                {"user_id": r[0], "nickname": r[1], "reputation": r[2]} for r in rows
+            ]
         except Error as e:
-            logger.error(f"Ошибка при получении списка пользователей по диапазону рейтинга: {e}")
+            logger.error(
+                f"Ошибка при получении списка пользователей по диапазону рейтинга: {e}"
+            )
             return []
+
 
 async def reset_user_rating(user_id: int) -> bool:
     """
@@ -1704,7 +1959,9 @@ async def reset_user_rating(user_id: int) -> bool:
             return False
         try:
             cursor = await conn.cursor()
-            await cursor.execute("UPDATE users SET reputation = 0 WHERE user_id = ?", (user_id,))
+            await cursor.execute(
+                "UPDATE users SET reputation = 0 WHERE user_id = ?", (user_id,)
+            )
             await conn.commit()
             if cursor.rowcount > 0:
                 await _log_rating_history(user_id, 0)
@@ -1716,6 +1973,7 @@ async def reset_user_rating(user_id: int) -> bool:
 
 
 # --- ФУНКЦИИ ДЛЯ РАБОТЫ С НАКАЗАНИЯМИ ---
+
 
 async def add_warning(user_id: int, chat_id: int, reason: str, warned_by: int) -> bool:
     """
@@ -1736,7 +1994,13 @@ async def add_warning(user_id: int, chat_id: int, reason: str, warned_by: int) -
                 INSERT OR REPLACE INTO user_warnings (user_id, chat_id, reason, warned_by, warned_at)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (user_id, chat_id, reason, warned_by, datetime.utcnow().isoformat())
+                (
+                    user_id,
+                    chat_id,
+                    reason,
+                    warned_by,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
             )
 
             # Добавляем в историю наказаний
@@ -1745,15 +2009,19 @@ async def add_warning(user_id: int, chat_id: int, reason: str, warned_by: int) -
                 INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id)
                 VALUES (?, ?, 'warn', 'added', ?, ?)
                 """,
-                (user_id, chat_id, reason, warned_by)
+                (user_id, chat_id, reason, warned_by),
             )
 
             await conn.commit()
-            logger.info(f"Гражданину {user_id} в чате {chat_id} выдано предупреждение модератором {warned_by}: {reason}")
+            logger.info(
+                f"Гражданину {user_id} в чате {chat_id} выдано предупреждение модератором {warned_by}: {reason}"
+            )
             return True
 
         except Error as e:
-            logger.error(f"Ошибка при добавлении предупреждения гражданину {user_id}: {e}")
+            logger.error(
+                f"Ошибка при добавлении предупреждения гражданину {user_id}: {e}"
+            )
             return False
 
 
@@ -1773,7 +2041,7 @@ async def remove_warning(user_id: int, chat_id: int, removed_by: int) -> bool:
             # Получаем информацию о предупреждении перед удалением
             await cursor.execute(
                 "SELECT reason FROM user_warnings WHERE user_id = ? AND chat_id = ?",
-                (user_id, chat_id)
+                (user_id, chat_id),
             )
             warning = await cursor.fetchone()
 
@@ -1783,7 +2051,7 @@ async def remove_warning(user_id: int, chat_id: int, removed_by: int) -> bool:
                 # Удаляем предупреждение
                 await cursor.execute(
                     "DELETE FROM user_warnings WHERE user_id = ? AND chat_id = ?",
-                    (user_id, chat_id)
+                    (user_id, chat_id),
                 )
 
                 # Добавляем в историю наказаний
@@ -1792,18 +2060,24 @@ async def remove_warning(user_id: int, chat_id: int, removed_by: int) -> bool:
                     INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id)
                     VALUES (?, ?, 'warn', 'removed', ?, ?)
                     """,
-                    (user_id, chat_id, reason, removed_by)
+                    (user_id, chat_id, reason, removed_by),
                 )
 
                 await conn.commit()
-                logger.info(f"С гражданина {user_id} в чате {chat_id} снято предупреждение модератором {removed_by}")
+                logger.info(
+                    f"С гражданина {user_id} в чате {chat_id} снято предупреждение модератором {removed_by}"
+                )
                 return True
             else:
-                logger.warning(f"У гражданина {user_id} в чате {chat_id} нет активных предупреждений")
+                logger.warning(
+                    f"У гражданина {user_id} в чате {chat_id} нет активных предупреждений"
+                )
                 return False
 
         except Error as e:
-            logger.error(f"Ошибка при снятии предупреждения с гражданина {user_id}: {e}")
+            logger.error(
+                f"Ошибка при снятии предупреждения с гражданина {user_id}: {e}"
+            )
             return False
 
 
@@ -1819,16 +2093,25 @@ async def get_warnings_count(user_id: int, chat_id: int) -> int:
             cursor = await conn.cursor()
             await cursor.execute(
                 "SELECT COUNT(*) FROM user_warnings WHERE user_id = ? AND chat_id = ?",
-                (user_id, chat_id)
+                (user_id, chat_id),
             )
             result = await cursor.fetchone()
             return result[0] if result else 0
         except Error as e:
-            logger.error(f"Ошибка при получении количества предупреждений гражданина {user_id}: {e}")
+            logger.error(
+                f"Ошибка при получении количества предупреждений гражданина {user_id}: {e}"
+            )
             return 0
 
 
-async def add_punishment(user_id: int, chat_id: int, punishment_type: str, reason: str, punished_by: int, duration_minutes: int = None) -> bool:
+async def add_punishment(
+    user_id: int,
+    chat_id: int,
+    punishment_type: str,
+    reason: str,
+    punished_by: int,
+    duration_minutes: int = None,
+) -> bool:
     """
     Добавляет наказание гражданину.
     punishment_type: 'ban', 'mute', 'warn'
@@ -1845,7 +2128,9 @@ async def add_punishment(user_id: int, chat_id: int, punishment_type: str, reaso
 
             expires_at = None
             if duration_minutes:
-                expires_at = (datetime.utcnow() + timedelta(minutes=duration_minutes)).isoformat()
+                expires_at = (
+                    datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
+                ).isoformat()
 
             # Добавляем активное наказание
             await cursor.execute(
@@ -1853,7 +2138,15 @@ async def add_punishment(user_id: int, chat_id: int, punishment_type: str, reaso
                 INSERT OR REPLACE INTO active_punishments (user_id, chat_id, punishment_type, reason, punished_by, punished_at, expires_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, chat_id, punishment_type, reason, punished_by, datetime.utcnow().isoformat(), expires_at)
+                (
+                    user_id,
+                    chat_id,
+                    punishment_type,
+                    reason,
+                    punished_by,
+                    datetime.now(timezone.utc).isoformat(),
+                    expires_at,
+                ),
             )
 
             # Добавляем в историю наказаний
@@ -1862,12 +2155,23 @@ async def add_punishment(user_id: int, chat_id: int, punishment_type: str, reaso
                 INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id, duration_minutes)
                 VALUES (?, ?, ?, 'added', ?, ?, ?)
                 """,
-                (user_id, chat_id, punishment_type, reason, punished_by, duration_minutes)
+                (
+                    user_id,
+                    chat_id,
+                    punishment_type,
+                    reason,
+                    punished_by,
+                    duration_minutes,
+                ),
             )
 
             await conn.commit()
-            duration_text = f"на {duration_minutes} минут" if duration_minutes else "перманентно"
-            logger.info(f"Гражданину {user_id} в чате {chat_id} выдано наказание '{punishment_type}' {duration_text} модератором {punished_by}: {reason}")
+            duration_text = (
+                f"на {duration_minutes} минут" if duration_minutes else "перманентно"
+            )
+            logger.info(
+                f"Гражданину {user_id} в чате {chat_id} выдано наказание '{punishment_type}' {duration_text} модератором {punished_by}: {reason}"
+            )
             return True
 
         except Error as e:
@@ -1875,7 +2179,9 @@ async def add_punishment(user_id: int, chat_id: int, punishment_type: str, reaso
             return False
 
 
-async def remove_punishment(user_id: int, chat_id: int, punishment_type: str, removed_by: int) -> bool:
+async def remove_punishment(
+    user_id: int, chat_id: int, punishment_type: str, removed_by: int
+) -> bool:
     """
     Снимает наказание с гражданина.
     Возвращает True если наказание снято успешно.
@@ -1891,7 +2197,7 @@ async def remove_punishment(user_id: int, chat_id: int, punishment_type: str, re
             # Получаем информацию о наказании перед удалением
             await cursor.execute(
                 "SELECT reason FROM active_punishments WHERE user_id = ? AND chat_id = ? AND punishment_type = ? AND is_active = 1",
-                (user_id, chat_id, punishment_type)
+                (user_id, chat_id, punishment_type),
             )
             punishment = await cursor.fetchone()
 
@@ -1901,7 +2207,7 @@ async def remove_punishment(user_id: int, chat_id: int, punishment_type: str, re
                 # Удаляем наказание
                 await cursor.execute(
                     "UPDATE active_punishments SET is_active = 0 WHERE user_id = ? AND chat_id = ? AND punishment_type = ?",
-                    (user_id, chat_id, punishment_type)
+                    (user_id, chat_id, punishment_type),
                 )
 
                 # Добавляем в историю наказаний
@@ -1910,14 +2216,18 @@ async def remove_punishment(user_id: int, chat_id: int, punishment_type: str, re
                     INSERT INTO punishment_history (user_id, chat_id, punishment_type, action, reason, moderator_id)
                     VALUES (?, ?, ?, 'removed', ?, ?)
                     """,
-                    (user_id, chat_id, punishment_type, reason, removed_by)
+                    (user_id, chat_id, punishment_type, reason, removed_by),
                 )
 
                 await conn.commit()
-                logger.info(f"С гражданина {user_id} в чате {chat_id} снято наказание '{punishment_type}' модератором {removed_by}")
+                logger.info(
+                    f"С гражданина {user_id} в чате {chat_id} снято наказание '{punishment_type}' модератором {removed_by}"
+                )
                 return True
             else:
-                logger.warning(f"У гражданина {user_id} в чате {chat_id} нет активного наказания '{punishment_type}'")
+                logger.warning(
+                    f"У гражданина {user_id} в чате {chat_id} нет активного наказания '{punishment_type}'"
+                )
                 return False
 
         except Error as e:
@@ -1937,23 +2247,27 @@ async def get_active_punishments(user_id: int, chat_id: int) -> list[dict]:
             cursor = await conn.cursor()
             await cursor.execute(
                 "SELECT punishment_type, reason, punished_by, punished_at, expires_at FROM active_punishments WHERE user_id = ? AND chat_id = ? AND is_active = 1",
-                (user_id, chat_id)
+                (user_id, chat_id),
             )
             punishments = await cursor.fetchall()
 
             result = []
             for punishment in punishments:
-                result.append({
-                    'type': punishment[0],
-                    'reason': punishment[1],
-                    'punished_by': punishment[2],
-                    'punished_at': punishment[3],
-                    'expires_at': punishment[4]
-                })
+                result.append(
+                    {
+                        "type": punishment[0],
+                        "reason": punishment[1],
+                        "punished_by": punishment[2],
+                        "punished_at": punishment[3],
+                        "expires_at": punishment[4],
+                    }
+                )
             return result
 
         except Error as e:
-            logger.error(f"Ошибка при получении активных наказаний гражданина {user_id}: {e}")
+            logger.error(
+                f"Ошибка при получении активных наказаний гражданина {user_id}: {e}"
+            )
             return []
 
 
@@ -1973,25 +2287,24 @@ async def get_expired_punishments() -> list[dict]:
                 FROM active_punishments
                 WHERE expires_at IS NOT NULL AND expires_at < ? AND is_active = 1
                 """,
-                (datetime.utcnow().isoformat(),)
+                (datetime.now(timezone.utc).isoformat(),),
             )
             punishments = await cursor.fetchall()
 
             result = []
             for punishment in punishments:
-                result.append({
-                    'user_id': punishment[0],
-                    'chat_id': punishment[1],
-                    'type': punishment[2],
-                    'reason': punishment[3],
-                    'punished_by': punishment[4]
-                })
+                result.append(
+                    {
+                        "user_id": punishment[0],
+                        "chat_id": punishment[1],
+                        "type": punishment[2],
+                        "reason": punishment[3],
+                        "punished_by": punishment[4],
+                    }
+                )
             return result
 
         except Error as e:
             logger.error(f"Ошибка при получении истекших наказаний: {e}")
             # Если таблица не существует, возвращаем пустой список
             return []
-
-
-

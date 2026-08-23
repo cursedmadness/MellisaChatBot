@@ -7,12 +7,14 @@ __pycache__/
 
 # Files containing sensitive info
 .env
-*.session
-*.session-journal
+.env.local
+*.env
+.env
 
 # Database
 *.db
 *.sqlite3
+users.db*
 
 # Logs
 *.log
@@ -20,3 +22,9 @@ __pycache__/
 # OS-generated files
 .DS_Store
 Thumbs.db
+
+# Local docs
+DEPLOY.md
+
+# Utility scripts (not part of bot)
+utils/
