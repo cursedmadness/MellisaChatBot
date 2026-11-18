@@ -1,4 +1,4 @@
-"""Repository regressions. Every test uses SQLite :memory:, never users.db/.env."""
+"""Регрессии репозитория. Каждый тест использует SQLite в памяти, без users.db и .env."""
 import asyncio
 import importlib.util
 from pathlib import Path

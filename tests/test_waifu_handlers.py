@@ -1,4 +1,4 @@
-"""Handler integration checks with no config/Telegram/production database."""
+"""Проверки хендлеров без config, Telegram и рабочей базы."""
 import importlib
 from pathlib import Path
 import sys

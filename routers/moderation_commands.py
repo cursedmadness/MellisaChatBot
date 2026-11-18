@@ -49,7 +49,7 @@ async def moderator_filter(message: Message) -> bool:
 
 def parse_moderation_args(message: Message, command: CommandObject | None,
                           target_user_id: int) -> tuple[int | None, str]:
-    """Separate the target from a duration (bare numbers mean minutes)."""
+    """Отделяет цель команды от срока: отдельное число — это минуты."""
     if command:
         text = command.args or ""
     else:

@@ -1,4 +1,4 @@
-"""Presentation regressions; imports never load config, dotenv or the real database."""
+"""Регрессии вывода: импорт не читает config, dotenv и рабочую базу."""
 import importlib
 import sys
 import unittest
@@ -24,8 +24,8 @@ def load_routers():
     strings = ModuleType("routers.strings")
     strings.HELP_TEXT = "help"
     names = ["utils", "weather_service", "user_commands", "hebao", "waifu_rp", "activity_commands"]
-    # Remove any previously imported routers inside the patch, then restore sys.modules.
-    # Import third-party dependencies before snapshotting sys.modules (numpy is not reloadable).
+    # Убираем ранее импортированные роутеры внутри подмены, затем возвращаем sys.modules.
+    # Сторонние зависимости импортируем до снимка sys.modules (numpy нельзя перезагрузить).
     import aiogram  # noqa: F401
     with patch.dict(sys.modules, {"database": db, "config": config, "routers": package,
                                  "dotenv": MagicMock(), "routers.strings": strings}):

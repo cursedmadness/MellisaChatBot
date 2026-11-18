@@ -60,8 +60,8 @@ class AsyncSQLiteContext:
         self.db = db
 
     async def __aenter__(self):
-        # One shared SQLite connection must not mix concurrent transactions.
-        # Nested repository calls in the same task reuse the outer transaction.
+        # Общее соединение SQLite не должно смешивать параллельные транзакции.
+        # Вложенные вызовы репозитория в той же задаче переиспользуют внешнюю транзакцию.
         global _db_owner, _db_depth
         task = asyncio.current_task()
         if _db_owner is not task:
@@ -75,8 +75,8 @@ class AsyncSQLiteContext:
         _db_depth -= 1
         if _db_depth == 0:
             try:
-                # Also discard unfinished work when a repository method caught
-                # an SQL error and returned False instead of propagating it.
+                # Заодно отбрасываем незавершённую работу, если метод репозитория
+                # перехватил ошибку SQL и вернул False вместо проброса исключения.
                 if self.db.in_transaction:
                     await self.db.rollback()
             finally:
@@ -244,8 +244,8 @@ async def add_new_columns() -> None:
                     )
                 """)
 
-                # Migrate the former one-warning-per-user constraint without
-                # dropping existing warning records.
+                # Убираем прежнее ограничение «один варн на пользователя»,
+                # не теряя уже выданные предупреждения.
                 schema = await (await conn.execute(
                     "SELECT sql FROM sqlite_master WHERE name='user_warnings'"
                 )).fetchone()
@@ -428,7 +428,7 @@ async def check_and_fix_waifu_constraint() -> None:
                     "Обнаружен устаревший CHECK constraint ('loli'). Начинаем миграцию..."
                 )
 
-                # Keep marriages pointing at waifu_cat, not a renamed old table.
+                # Браки должны ссылаться на waifu_cat, а не на переименованную старую таблицу.
                 await conn.commit()
                 await cursor.execute("PRAGMA foreign_keys = OFF")
                 await cursor.execute("BEGIN TRANSACTION")
@@ -991,7 +991,7 @@ async def add_user(user_id: int, nickname: str, username: str | None = None) -> 
 
 
 async def claim_daily_food(user_id: int, item_key: str, item_name: str) -> bool:
-    """Claim once per UTC day; grant and timestamp commit together."""
+    """Выдаёт еду раз в сутки по UTC: начисление и отметка времени коммитятся вместе."""
     async with await create_connection() as conn:
         now = datetime.now(timezone.utc).isoformat()
         cursor = await conn.execute(
@@ -1023,7 +1023,7 @@ def satiety_mood(satiety: int) -> str:
 
 
 async def decay_waifu_satiety(user_id: int, now: datetime | None = None) -> dict | None:
-    """Re-read under the repository lock; preserve incomplete decay intervals."""
+    """Перечитывает кошку под блокировкой и сохраняет остаток интервала голода."""
     async with await create_connection() as conn:
         waifu = await get_waifu_by_user(user_id)
         if not waifu:
@@ -1053,7 +1053,7 @@ async def decay_waifu_satiety(user_id: int, now: datetime | None = None) -> dict
 async def feed_waifu_atomic(user_id: int, satiety: int, trust_bonus: int,
                             now: datetime | None = None,
                             cooldown_hours: float = 3) -> dict:
-    """Serialize cooldown, inventory debit and cat state update as one unit."""
+    """Выполняет проверку кулдауна, списание еды и обновление кошки единым целым."""
     async with await create_connection() as conn:
         now = now or datetime.now(timezone.utc)
         waifu = await decay_waifu_satiety(user_id,now)

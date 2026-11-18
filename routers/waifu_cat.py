@@ -614,7 +614,7 @@ async def get_daily_food_command(message: Message) -> None:
     try:
         user_id = message.from_user.id
 
-        # Registration is required so every claim has a persistent cooldown.
+        # Регистрация нужна, чтобы у каждой выдачи был постоянный кулдаун.
         await add_user(user_id, message.from_user.first_name or "гражданин", message.from_user.username)
         item_key = "korm_waifu" if random.random() < 0.5 else "miska_risa"
         item_name = "корм кошко-жены" if item_key == "korm_waifu" else "миска риса"

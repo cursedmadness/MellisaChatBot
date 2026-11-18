@@ -1,4 +1,4 @@
-"""Isolated regressions: no configuration, Telegram requests or real database."""
+"""Изолированные регрессии: без конфигурации, запросов в Telegram и рабочей базы."""
 import ast
 import importlib.util
 from pathlib import Path
