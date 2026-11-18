@@ -17,22 +17,15 @@ from database import (
     update_cat_name,
     update_waifu_age,
     update_cat_image,
-    update_cat_state,
-    update_waifu_trust,
     get_marriage,
     register_marriage,
     add_user,
     get_user_by_username,
-    get_user_rice_count,
-    upsert_hebao_item,
-    get_hebao_items,
     get_user_rate,
     get_all_waifus_with_owners,
     clear_all_waifus,
     is_admin,
     delete_waifu_by_user,
-    can_receive_daily_food,
-    update_daily_food_time,
 )
 from routers.utils import (
     extract_user_from_text,
@@ -122,16 +115,6 @@ def _pick_default_image() -> str | None:
         return None
     chosen = random.choice(image_files)
     return os.path.join(folder, chosen)
-
-
-def _compute_mood(satiety: int) -> str:
-    if satiety >= 70:
-        return "отличное"
-    if satiety >= 40:
-        return "хорошее"
-    if satiety >= 15:
-        return "среднее"
-    return "грустное"
 
 
 async def _apply_satiety_decay(waifu: dict) -> bool:

@@ -1011,6 +1011,17 @@ async def claim_daily_food(user_id: int, item_key: str, item_name: str) -> bool:
         return True
 
 
+def satiety_mood(satiety: int) -> str:
+    """Единая шкала настроения по уровню сытости."""
+    if satiety >= 70:
+        return "отличное"
+    if satiety >= 40:
+        return "хорошее"
+    if satiety >= 15:
+        return "среднее"
+    return "грустное"
+
+
 async def decay_waifu_satiety(user_id: int, now: datetime | None = None) -> dict | None:
     """Re-read under the repository lock; preserve incomplete decay intervals."""
     async with await create_connection() as conn:
@@ -1028,7 +1039,7 @@ async def decay_waifu_satiety(user_id: int, now: datetime | None = None) -> dict
         steps = int((now-last)//interval)
         if steps > 0:
             satiety = max(0,(waifu.get("satiety") or 0)-steps*10)
-            mood = "отличное" if satiety >= 70 else "хорошее" if satiety >= 40 else "среднее" if satiety >= 15 else "грустное"
+            mood = satiety_mood(satiety)
             timestamp = (last+steps*interval).isoformat()
             await conn.execute(
                 "UPDATE waifu_cat SET satiety=?,mood=?,last_satiety_update=? WHERE user_id=?",
@@ -1076,7 +1087,7 @@ async def feed_waifu_atomic(user_id: int, satiety: int, trust_bonus: int,
         await conn.execute(
             """UPDATE waifu_cat SET satiety=?,mood=?,trust=?,last_feed_time=?,
             last_satiety_update=? WHERE user_id=?""",
-            (satiety,"отличное" if satiety>=70 else "хорошее",trust,now.isoformat(),now.isoformat(),user_id),
+            (satiety,satiety_mood(satiety),trust,now.isoformat(),now.isoformat(),user_id),
         )
         await conn.commit()
         return {"status":"ok","cat_name":waifu["cat_name"],"trust":trust,
