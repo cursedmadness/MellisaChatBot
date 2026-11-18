@@ -45,6 +45,7 @@ from config import (
 )
 import random
 from html import escape
+from telegram_monitor import attach_monitor
 
 
 # Загружаем переменные окружения
@@ -312,6 +313,9 @@ async def main():
         asyncio.create_task(waifu_hunger_notifier_task(bot)),
         asyncio.create_task(waifu_random_rp_task(bot)),
     ]
+
+    # Монитор простоев Telegram: тревога и отчёт о восстановлении
+    monitor = attach_monitor(bot, DEV_CHAT_ID)
 
     logger.info("Запуск бота MellisaChatBot...")
     try:
