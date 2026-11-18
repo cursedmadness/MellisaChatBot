@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 import logging
 import os
+from html import escape
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -158,7 +159,8 @@ def format_weather_message(
         else:
             temp_emoji = "🥶"
 
-        city_display = city_name.capitalize() if city_name else "вашем городе"
+        cond_text = escape(cond_text)
+        city_display = escape(city_name.capitalize()) if city_name else "вашем городе"
         header = (
             f"🏛 Исходя из погодных сводок Партии погода в городе <b>{city_display}</b>:"
         )
@@ -185,7 +187,7 @@ def format_weather_message(
 async def get_weather_string(city_name: str, concise: bool = False) -> str:
     """Полный цикл получения погоды для города."""
     lat, lon = await get_coordinates(city_name)
-    if lat is not None:
+    if lat is not None and lon is not None:
         weather_data = await get_weather(lat, lon)
         if weather_data:
             return format_weather_message(

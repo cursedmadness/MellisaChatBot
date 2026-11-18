@@ -4,6 +4,7 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 import datetime
+from html import escape
 from database import (
     add_user,
     get_user_nickname,
@@ -58,7 +59,7 @@ async def start_handler(message: Message, state: FSMContext) -> None:
             # Полностью новый гражданин
             await add_user(user_id, first_name, message.from_user.username)
             await message.answer(
-                f"🌸 Добро пожаловать, {first_name}. Ваш профиль загружен в систему. Партия гордится Вами!\n\n"
+                f"🌸 Добро пожаловать, {escape(first_name)}. Ваш профиль загружен в систему. Партия гордится Вами!\n\n"
                 f"Для начала давайте составим Ваше досье. Это обязательно для каждого достойного гражданина. 🇨🇳\n\n"
                 f"<b>Как нам к Вам обращаться? (Ваш ник):</b>"
             )
@@ -93,14 +94,14 @@ async def start_handler(message: Message, state: FSMContext) -> None:
                 )
 
             await message.answer(
-                f"Приветствуем Вас снова, {greeting_name}! 👋\nПартия рада Вашему возвращению.\n\n"
+                f"Приветствуем Вас снова, {escape(greeting_name)}! 👋\nПартия рада Вашему возвращению.\n\n"
                 f"{intro_text}\n"
                 f"• {missing_text}\n\n"
                 f"Пожалуйста, заполните их для полноценного участия в жизни общества! 🇨🇳"
             )
         else:
             await message.answer(
-                f"Приветствуем Вас снова, {greeting_name}! 👋\nПартия рада Вашему возвращению.\n\n"
+                f"Приветствуем Вас снова, {escape(greeting_name)}! 👋\nПартия рада Вашему возвращению.\n\n"
                 f"Ваше досье полностью заполнено! Партия гордится Вами. 🌟\n\n"
                 f"Если захотите обновить данные, Вы всегда можете использовать команды:\n"
                 f"<code>.ник [Ник]</code>\n<code>.город [Город]</code>\n<code>.описание [Описание]</code>"
@@ -128,7 +129,7 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
 
         await set_user_nickname(message.from_user.id, new_nickname)
         await message.answer(
-            f"✅ Принято, {new_nickname}! Теперь Партии нужно знать Ваше местоположение для точного прогноза погоды. 📍\n"
+            f"✅ Принято, {escape(new_nickname)}! Теперь Партии нужно знать Ваше местоположение для точного прогноза погоды. 📍\n"
             f"<b>Напишите Ваш город:</b>"
         )
         await state.set_state(RegistrationStates.waiting_for_city)
@@ -151,7 +152,7 @@ async def process_city(message: Message, state: FSMContext) -> None:
 
         await set_user_city(message.from_user.id, city)
         await message.answer(
-            f"✅ Город {city} закреплен за Вами. И последнее — расскажите немного о себе для Вашего досье. 📄\n"
+            f"✅ Город {escape(city)} закреплен за Вами. И последнее — расскажите немного о себе для Вашего досье. 📄\n"
             f"<b>Напишите Ваше описание:</b>"
         )
         await state.set_state(RegistrationStates.waiting_for_description)
@@ -209,7 +210,7 @@ async def set_nickname_handler(message: Message) -> None:
             return
 
         await set_user_nickname(user_id, new_nickname)
-        await message.answer(f"✅ Ваше учётное имя успешно изменено на {new_nickname}")
+        await message.answer(f"✅ Ваше учётное имя успешно изменено на {escape(new_nickname)}")
     except Exception as e:
         logger.error(f"Ошибка в set_nickname_handler: {e}")
         await message.answer("Не удалось сменить ник.")
@@ -233,7 +234,7 @@ async def show_my_nickname(message: Message) -> None:
         nickname = await get_user_nickname(user_id)
 
         if nickname:
-            await message.answer(f"📝 Твой текущий ник: <b>{nickname}</b>")
+            await message.answer(f"📝 Твой текущий ник: <b>{escape(nickname)}</b>")
         else:
             await message.answer("Я тебя ещё не знаю. Напиши /start для регистрации.")
     except Exception as e:
@@ -286,7 +287,7 @@ async def set_city_command_handler(message: Message, state: FSMContext) -> None:
 
         if city:
             await set_user_city(message.from_user.id, city)
-            await message.answer(f"✅ Город <b>{city}</b> успешно закреплен за Вами.")
+            await message.answer(f"✅ Город <b>{escape(city)}</b> успешно закреплен за Вами.")
             await state.clear()
         else:
             await message.answer("📍 Напишите Ваш город:")
@@ -343,7 +344,7 @@ async def weather_command_handler(
             await message.answer(weather_info)
         else:
             await message.answer(
-                f"❌ Не удалось получить данные о погоде для города <b>{city}</b>. Проверьте правильность написания."
+                f"❌ Не удалось получить данные о погоде для города <b>{escape(city)}</b>. Проверьте правильность написания."
             )
     except Exception as e:
         logger.error(f"Ошибка в weather_command_handler: {e}")
@@ -393,7 +394,7 @@ async def reset_nickname_handler(message: Message) -> None:
 
         await set_user_nickname(user_id, first_name)
         await message.answer(
-            f"🗑️ Ваше имя успешно отправлено в ссылку. Теперь Вы снова {first_name}."
+            f"🗑️ Ваше имя успешно отправлено в ссылку. Теперь Вы снова {escape(first_name)}."
         )
     except Exception as e:
         logger.error(f"Ошибка в reset_nickname_handler: {e}")
@@ -457,7 +458,7 @@ async def show_my_description(message: Message) -> None:
         description = await get_user_description(user_id)
 
         if description:
-            await message.answer(f"📄 Твоё описание:\n<i>{description}</i>")
+            await message.answer(f"📄 Твоё описание:\n<i>{escape(description)}</i>")
         else:
             await message.answer(
                 "У тебя пока нет описания. Можешь добавить его командой <code>/set_description</code>."
@@ -573,11 +574,11 @@ async def show_user_id(message: Message, command: CommandObject = None) -> None:
                 target_display = f"user_{target_id}"
             else:
                 # Если не нашли по ID/меншену, возможно это просто текст (попытка найти по базе будет в resolve_user_id)
-                await message.reply(f"Гражданин '{mention_part}' не найден в системе.")
+                await message.reply(f"Гражданин '{escape(mention_part)}' не найден в системе.")
                 return
 
         # Формируем ответ
-        user_link = f"<a href='tg://user?id={target_id}'>{target_display}</a>"
+        user_link = get_user_link(target_id, target_display)
         response = f"Ид гражданина {user_link} - <code>{target_id}</code>"
         await message.reply(response, parse_mode="HTML")
     except Exception as e:

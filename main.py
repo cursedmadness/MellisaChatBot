@@ -44,6 +44,7 @@ from config import (
     DEV_CHAT_ID,
 )
 import random
+from html import escape
 
 
 # Загружаем переменные окружения
@@ -138,7 +139,7 @@ async def waifu_greetings_task(bot: Bot):
             for w in waifus:
                 try:
                     user_id = w["user_id"]
-                    cat_name = w["cat_name"] or "кошко-жена"
+                    cat_name = escape(w["cat_name"] or "кошко-жена")
 
                     # Выбираем рандомную фразу
                     if is_morning:
@@ -197,7 +198,7 @@ async def waifu_hunger_notifier_task(bot: Bot):
             waifus = await get_all_waifus_with_owners()
             for w in waifus:
                 user_id = w["user_id"]
-                cat_name = w["cat_name"] or "кошко-жена"
+                cat_name = escape(w["cat_name"] or "кошко-жена")
 
                 # Применяем декремент сытости по времени
                 from routers.waifu_cat import _apply_satiety_decay
@@ -263,10 +264,8 @@ async def waifu_random_rp_task(bot: Bot):
                     # Шанс 10% на каждый 1 час получить РП-милость (в среднем 1 сообщение в день-два)
                     if random.random() < 0.10:
                         user_id = w["user_id"]
-                        cat_name = w["cat_name"] or "кошко-жена"
-
                         try:
-                            msg = await generate_waifu_rp_message(user_id, cat_name)
+                            msg = await generate_waifu_rp_message(user_id, w["cat_name"] or "кошко-жена")
                             await bot.send_message(user_id, msg, parse_mode="HTML")
                             await asyncio.sleep(0.05)
                         except (TelegramForbiddenError, TelegramBadRequest):
@@ -339,6 +338,7 @@ async def main():
         # Отменяем фоновые задачи при выходе
         for task in tasks:
             task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await close_db()
         await close_weather_session()
         await bot.session.close()

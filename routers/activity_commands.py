@@ -19,6 +19,8 @@ from routers.utils import get_user_link
 import random
 import asyncio
 import logging
+import calendar
+from html import escape
 from datetime import datetime, time, timedelta, timezone
 
 from config import (
@@ -51,11 +53,11 @@ async def publish_daily_report(bot: Bot):
     report_text += "Топ-5 самых активных граждан:\n\n"
 
     for i, (nickname, activity) in enumerate(daily_top, 1):
-        report_text += f"{i}. {nickname} - {activity} сообщений\n"
+        report_text += f"{i}. {escape(str(nickname))} - {activity} сообщений\n"
 
     # Отдельное сообщение о победителе
     winner_nickname, winner_activity = daily_top[0]
-    winner_text = f"🏆 Топ-1 по речевому вкладу — гражданин {winner_nickname}. Партия гордится им!"
+    winner_text = f"🏆 Топ-1 по речевому вкладу — гражданин {escape(str(winner_nickname))}. Партия гордится им!"
 
     # Отправляем во все чаты
     success_count = 0
@@ -119,7 +121,7 @@ async def publish_monthly_report(bot: Bot):
     report_text += "Топ-30 самых активных граждан:\n\n"
 
     for i, (nickname, activity) in enumerate(monthly_top, 1):
-        report_text += f"{i}. {nickname} - {activity} сообщений\n"
+        report_text += f"{i}. {escape(str(nickname))} - {activity} сообщений\n"
 
     # Отправляем во все чаты
     success_count = 0
@@ -170,44 +172,29 @@ async def daily_report_task(bot: Bot):
             await asyncio.sleep(60)  # Ждем минуту перед повторной попыткой
 
 
+def next_monthly_report_time(now: datetime) -> datetime:
+    """Последний день текущего либо следующего месяца, строго после now (UTC)."""
+    now = now.astimezone(timezone.utc)
+    target = now.replace(
+        day=calendar.monthrange(now.year, now.month)[1],
+        hour=MONTHLY_REPORT_TIME_HOUR, minute=MONTHLY_REPORT_TIME_MINUTE,
+        second=0, microsecond=0,
+    )
+    if now >= target:
+        year = now.year + (now.month == 12)
+        month = now.month % 12 + 1
+        target = target.replace(year=year, month=month, day=1)
+        target = target.replace(day=calendar.monthrange(year, month)[1])
+    return target
+
+
 async def monthly_report_task(bot: Bot):
     """Фоновая задача для ежемесячной публикации отчета в последний день месяца в заданное время."""
     while True:
         try:
             now = datetime.now(timezone.utc)
 
-            # Вычисляем последний день текущего месяца
-            if now.month == 12:
-                last_day = datetime(
-                    now.year + 1, 1, 1, tzinfo=timezone.utc
-                ) - timedelta(days=1)
-            else:
-                last_day = datetime(
-                    now.year, now.month + 1, 1, tzinfo=timezone.utc
-                ) - timedelta(days=1)
-
-            # Устанавливаем время последнего дня месяца
-            target_time = datetime.combine(
-                last_day.date(),
-                time(MONTHLY_REPORT_TIME_HOUR, MONTHLY_REPORT_TIME_MINUTE, 0),
-                tzinfo=timezone.utc,
-            )
-
-            if now >= target_time:
-                # Если уже прошло время публикации, ждем до следующего месяца
-                if now.month == 12:
-                    next_month = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-                else:
-                    next_month = datetime(
-                        now.year, now.month + 1, 1, tzinfo=timezone.utc
-                    )
-
-                last_day_next = next_month - timedelta(days=1)
-                target_time = datetime.combine(
-                    last_day_next.date(),
-                    time(MONTHLY_REPORT_TIME_HOUR, MONTHLY_REPORT_TIME_MINUTE, 0),
-                    tzinfo=timezone.utc,
-                )
+            target_time = next_monthly_report_time(now)
 
             seconds_until_next = (target_time - now).total_seconds()
 
@@ -247,7 +234,7 @@ async def show_stats_handler(message: Message) -> None:
         response_text = "✍️ <b>Сводка народной активности</b>\n\n"
 
         for i, (nickname, activity) in enumerate(leaderboard, 1):
-            response_text += f"{i}. {nickname} – {activity} сообщений\n"
+            response_text += f"{i}. {escape(str(nickname))} – {activity} сообщений\n"
 
         await message.answer(response_text)
     except Exception as e:

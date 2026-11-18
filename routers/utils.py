@@ -1,4 +1,5 @@
 import re
+from html import escape
 from aiogram.types import Message
 from aiogram.filters.command import CommandObject
 from database import get_user_by_username, get_user_rate, get_user_profile
@@ -14,6 +15,8 @@ def extract_user_from_text(message: Message) -> str | int | None:
 
     # 2. Если есть упоминание в тексте
     text = (message.text or message.caption or "").strip()
+    # Адресат slash-команды — бот, а не целевой пользователь.
+    text = re.sub(r'^/[\w]+(?:@[a-zA-Z0-9_]+)?(?:\s+|$)', '', text)
     
     # Паттерн для @username
     username_match = re.search(r'@([a-zA-Z0-9_]{5,32})', text)
@@ -65,7 +68,7 @@ def get_user_link(user_id: int, name: str | None = None) -> str:
     """
     Возвращает HTML-ссылку на профиль пользователя.
     """
-    display_name = name if name else f"ID:{user_id}"
+    display_name = escape(str(name)) if name else f"ID:{user_id}"
     return f"<a href='tg://user?id={user_id}'>{display_name}</a>"
 
 async def get_user_display_name(user_id: int) -> str:
@@ -137,10 +140,10 @@ async def get_profile_text(user_id: int) -> str:
     rate_display = await get_rate_display(user_id)
 
     if profile_data:
-        nickname = profile_data.get("nickname", "Не указано")
-        activity = profile_data.get("activity", "Не указано")
-        description = profile_data.get("description") or "Не указано"
-        city = profile_data.get("city") or "Не указано"
+        nickname = escape(str(profile_data.get("nickname") or "Не указано"))
+        activity = escape(str(profile_data.get("activity", "Не указано")))
+        description = escape(str(profile_data.get("description") or "Не указано"))
+        city = escape(str(profile_data.get("city") or "Не указано"))
 
         return (
             f"👤 <b>Досье гражданина</b>\n\n"
@@ -159,11 +162,14 @@ def extract_args(text: str, prefixes: list[str]) -> str:
     """
     if not text:
         return ""
-    text_lower = text.lower()
+    text = text.strip()
     for p in prefixes:
-        if text_lower.startswith(p.lower()):
-            return text[len(p):].strip()
-    return text.strip()
+        # Не съедаем части слов; /command@bot также имеет аргументы после пробела.
+        bot_suffix = r'(?:@[a-zA-Z0-9_]+)?' if p.startswith('/') else ''
+        match = re.match(re.escape(p) + bot_suffix + r'(?:\s+|$)', text, re.IGNORECASE)
+        if match:
+            return text[match.end():].strip()
+    return text
 async def extract_target_user(message: Message, command: CommandObject = None) -> tuple[int | None, str | None]:
     """
     Унифицированно извлекает user_id и имя/ничейм цели команды.
@@ -181,18 +187,19 @@ async def extract_target_user(message: Message, command: CommandObject = None) -
 
     # 2. Аргументы команды или текст
     mention = None
-    if command and command.args:
-        mention = command.args.strip().split()[0] # Берем первое слово как меншн
+    if command is not None:
+        args = (command.args or "").split()
+        mention = args[0] if args else None
     else:
         # Пытаемся вычленить из текста вручную (для текстовых префиксов типа +рейтинг)
         text = message.text or ""
         parts = text.split()
         if len(parts) > 1:
             # Проверяем, не число ли это (для команд типа +рейтинг 100, где нет меншна)
-            if not parts[1].replace('-','').isdigit():
+            if parts[0].lower() in ("+рейтинг", "-рейтинг") and parts[1].lstrip('-').isdigit():
+                mention = parts[2] if len(parts) > 2 else None
+            else:
                 mention = parts[1]
-            elif len(parts) > 2:
-                mention = parts[2]
 
     if mention:
         target_id = await resolve_user_id(mention)

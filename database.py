@@ -1,4 +1,6 @@
 import aiosqlite
+import asyncio
+from pathlib import Path
 from sqlite3 import Error
 from datetime import datetime, timedelta, timezone
 import logging
@@ -7,29 +9,40 @@ from config import MAX_RICE_PER_USER
 
 logger = logging.getLogger(__name__)
 
-DB_NAME = "users.db"  # Имя файла БД
+DB_NAME = str(Path(__file__).resolve().with_name("users.db"))
 
 _db = None
+_db_lock = asyncio.Lock()
+_init_lock = asyncio.Lock()
+_db_owner = None
+_db_depth = 0
 
 
 async def init_db() -> aiosqlite.Connection:
     """Инициализирует глобальное соединение с БД."""
     global _db
-    if _db is None:
-        try:
-            _db = await aiosqlite.connect(DB_NAME)
-            _db.row_factory = aiosqlite.Row
-            await _db.execute("PRAGMA foreign_keys = ON")
-            await _db.execute("PRAGMA journal_mode = WAL")
-            await _db.execute("PRAGMA synchronous = NORMAL")
-            await _db.execute("PRAGMA cache_size = -64000")
-            await _db.execute("PRAGMA temp_store = MEMORY")
-            logger.info(
-                f"Глобальное соединение с БД {DB_NAME} установлено (WAL mode: ON, sync: NORMAL)."
-            )
-        except Exception as e:
-            logger.error(f"Ошибка инициализации БД: {e}")
-            raise
+    async with _init_lock:
+        if _db is None:
+            conn = None
+            try:
+                conn = await aiosqlite.connect(DB_NAME)
+                conn.row_factory = aiosqlite.Row
+                await conn.execute("PRAGMA foreign_keys = ON")
+                await conn.execute("PRAGMA journal_mode = WAL")
+                await conn.execute("PRAGMA synchronous = NORMAL")
+                await conn.execute("PRAGMA cache_size = -64000")
+                await conn.execute("PRAGMA temp_store = MEMORY")
+                _db = conn
+                logger.info(
+                    f"Глобальное соединение с БД {DB_NAME} установлено (WAL mode: ON, sync: NORMAL)."
+                )
+            except Exception as e:
+                # Не публикуем частично настроенное соединение.
+                if conn is not None:
+                    await conn.close()
+                _db = None
+                logger.error(f"Ошибка инициализации БД: {e}")
+                raise
     return _db
 
 
@@ -47,18 +60,35 @@ class AsyncSQLiteContext:
         self.db = db
 
     async def __aenter__(self):
+        # One shared SQLite connection must not mix concurrent transactions.
+        # Nested repository calls in the same task reuse the outer transaction.
+        global _db_owner, _db_depth
+        task = asyncio.current_task()
+        if _db_owner is not task:
+            await _db_lock.acquire()
+            _db_owner = task
+        _db_depth += 1
         return self.db
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        # Мы не закрываем глобальное соединение здесь.
-        pass
+        global _db_owner, _db_depth
+        _db_depth -= 1
+        if _db_depth == 0:
+            try:
+                # Also discard unfinished work when a repository method caught
+                # an SQL error and returned False instead of propagating it.
+                if self.db.in_transaction:
+                    await self.db.rollback()
+            finally:
+                _db_owner = None
+                _db_lock.release()
 
 
 async def create_connection() -> AsyncSQLiteContext:
     """Возвращает контекстный менеджер для работы с глобальным соединением."""
-    if _db is None:
-        await init_db()
-    return AsyncSQLiteContext(_db)
+    # init_db сам берёт _init_lock, поэтому параллельные вызовы безопасны.
+    conn = await init_db()
+    return AsyncSQLiteContext(conn)
 
 
 async def _generic_update(table: str, where_col: str, where_val: any, **fields) -> bool:
@@ -186,6 +216,7 @@ async def create_table() -> None:
                 logger.info("Проверка/создание таблиц выполнена.")
             except Error as e:
                 logger.error(f"Ошибка при создании таблиц: {e}")
+                raise
 
 
 async def add_new_columns() -> None:
@@ -209,10 +240,29 @@ async def add_new_columns() -> None:
                         chat_id INTEGER NOT NULL,
                         reason TEXT,
                         warned_by INTEGER NOT NULL,
-                        warned_at TEXT DEFAULT (datetime('now')),
-                        UNIQUE(user_id, chat_id)
+                        warned_at TEXT DEFAULT (datetime('now'))
                     )
                 """)
+
+                # Migrate the former one-warning-per-user constraint without
+                # dropping existing warning records.
+                schema = await (await conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE name='user_warnings'"
+                )).fetchone()
+                if schema and "UNIQUE" in schema[0].upper():
+                    await cursor.execute("ALTER TABLE user_warnings RENAME TO user_warnings_old")
+                    await cursor.execute("""CREATE TABLE user_warnings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+                        reason TEXT, warned_by INTEGER NOT NULL,
+                        warned_at TEXT DEFAULT (datetime('now')))""")
+                    await cursor.execute("INSERT INTO user_warnings SELECT * FROM user_warnings_old")
+                    await cursor.execute("DROP TABLE user_warnings_old")
+
+                await cursor.execute("""CREATE TABLE IF NOT EXISTS activity_daily (
+                    user_id INTEGER NOT NULL, activity_date TEXT NOT NULL,
+                    messages INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(user_id, activity_date))""")
 
                 # Таблица для активных наказаний
                 await cursor.execute("""
@@ -343,6 +393,7 @@ async def add_new_columns() -> None:
                 await conn.commit()
             except Error as e:
                 logger.error(f"Произошла ошибка при добавлении столбцов: {e}")
+                raise
 
     # Запускаем миграцию constraints, если нужно
     await check_and_fix_waifu_constraint()
@@ -377,14 +428,14 @@ async def check_and_fix_waifu_constraint() -> None:
                     "Обнаружен устаревший CHECK constraint ('loli'). Начинаем миграцию..."
                 )
 
+                # Keep marriages pointing at waifu_cat, not a renamed old table.
+                await conn.commit()
+                await cursor.execute("PRAGMA foreign_keys = OFF")
                 await cursor.execute("BEGIN TRANSACTION")
-
-                # 2. Переименовываем старую таблицу
-                await cursor.execute("ALTER TABLE waifu_cat RENAME TO waifu_cat_old")
 
                 # 3. Создаем новую таблицу с правильным constraint
                 await cursor.execute("""
-                    CREATE TABLE waifu_cat (
+                    CREATE TABLE waifu_cat_new (
                         cats_id INTEGER PRIMARY KEY,
                         user_id INTEGER UNIQUE NOT NULL,
                         cat_name TEXT,
@@ -397,27 +448,29 @@ async def check_and_fix_waifu_constraint() -> None:
                         age_days INTEGER DEFAULT 1,
                         last_age_update TEXT,
                         last_satiety_update TEXT,
-                        last_feed_time TEXT
+                        last_feed_time TEXT,
+                        trust INTEGER DEFAULT 0
                     )
                 """)
 
                 # 4. Копируем данные, заменяя loli на kitten
                 await cursor.execute("""
-                    INSERT INTO waifu_cat (
+                    INSERT INTO waifu_cat_new (
                         cats_id, user_id, cat_name, category_cats, date_cat, 
                         satiety, miska_risa, mood, image_cats, 
-                        age_days, last_age_update, last_satiety_update, last_feed_time
+                        age_days, last_age_update, last_satiety_update, last_feed_time, trust
                     )
                     SELECT 
                         cats_id, user_id, cat_name, 
                         CASE WHEN category_cats = 'loli' THEN 'kitten' ELSE category_cats END,
                         date_cat, satiety, miska_risa, mood, image_cats, 
-                        age_days, last_age_update, last_satiety_update, last_feed_time
-                    FROM waifu_cat_old
+                        age_days, last_age_update, last_satiety_update, last_feed_time, trust
+                    FROM waifu_cat
                 """)
 
                 # 5. Удаляем старую таблицу
-                await cursor.execute("DROP TABLE waifu_cat_old")
+                await cursor.execute("DROP TABLE waifu_cat")
+                await cursor.execute("ALTER TABLE waifu_cat_new RENAME TO waifu_cat")
 
                 # 6. Восстанавливаем индекс
                 await cursor.execute(
@@ -430,6 +483,9 @@ async def check_and_fix_waifu_constraint() -> None:
         except Exception as e:
             await conn.rollback()
             logger.error(f"Ошибка при миграции waifu_cat: {e}")
+            raise
+        finally:
+            await conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _hebao_row_to_dict(row: aiosqlite.Row | None) -> dict | None:
@@ -494,30 +550,21 @@ async def upsert_hebao_item(
             display_name = item_name or item_key
 
             if set_value is not None:
-                new_qty = max(int(set_value), 0)
+                await cursor.execute(
+                    """INSERT INTO hebao_items (user_id,item_key,item_name,quantity,updated_at)
+                    VALUES (?,?,?,?,?) ON CONFLICT(user_id,item_key) DO UPDATE SET
+                    item_name=excluded.item_name, quantity=excluded.quantity,
+                    updated_at=excluded.updated_at""",
+                    (user_id,item_key,display_name,max(int(set_value),0),now_iso),
+                )
             else:
                 await cursor.execute(
-                    "SELECT quantity FROM hebao_items WHERE user_id = ? AND item_key = ?",
-                    (user_id, item_key),
+                    """INSERT INTO hebao_items (user_id,item_key,item_name,quantity,updated_at)
+                    VALUES (?,?,?,MAX(0,?),?) ON CONFLICT(user_id,item_key) DO UPDATE SET
+                    item_name=CASE WHEN ? IS NULL THEN hebao_items.item_name ELSE excluded.item_name END,
+                    quantity=MAX(0,hebao_items.quantity+?), updated_at=excluded.updated_at""",
+                    (user_id,item_key,display_name,int(delta or 0),now_iso,item_name,int(delta or 0)),
                 )
-                row = await cursor.fetchone()
-                current_qty = row[0] if row else 0
-                delta_val = int(delta or 0)
-                new_qty = current_qty + delta_val
-                if new_qty < 0:
-                    new_qty = 0
-
-            await cursor.execute(
-                """
-                INSERT INTO hebao_items (user_id, item_key, item_name, quantity, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(user_id, item_key) DO UPDATE SET
-                    item_name = excluded.item_name,
-                    quantity = excluded.quantity,
-                    updated_at = excluded.updated_at
-                """,
-                (user_id, item_key, display_name, new_qty, now_iso),
-            )
             await conn.commit()
             return True
         except Error as e:
@@ -582,6 +629,7 @@ def _waifu_row_to_dict(row: aiosqlite.Row | None) -> dict | None:
         "last_satiety_update": safe(10),
         "trust": safe(11, 0),
         "last_feed_time": safe(12),
+        "miska_risa": safe(13, 0),
     }
 
 
@@ -644,9 +692,18 @@ async def create_waifu_for_user(
                 ),
             )
 
-            # Выдаём 1 миску риса и 3 корма кошко-жены (korm_waifu)
-            await upsert_hebao_item(user_id, "miska_risa", "миска риса", delta=1)
-            await upsert_hebao_item(user_id, "korm_waifu", "корм кошко-жены", delta=3)
+            # Выдаём 1 миску риса и 3 корма в той же транзакции, что и создание кошки.
+            for key, name, amount in (
+                ("miska_risa", "миска риса", 1),
+                ("korm_waifu", "корм кошко-жены", 3),
+            ):
+                await cursor.execute(
+                    """INSERT INTO hebao_items (user_id,item_key,item_name,quantity,updated_at)
+                    VALUES (?,?,?,?,?) ON CONFLICT(user_id,item_key) DO UPDATE SET
+                    quantity=hebao_items.quantity+excluded.quantity,
+                    updated_at=excluded.updated_at""",
+                    (user_id, key, name, amount, now_iso),
+                )
             await conn.commit()
 
             logger.info(
@@ -669,7 +726,7 @@ async def get_waifu_by_user(user_id: int) -> dict | None:
             await cursor.execute(
                 """
                 SELECT cats_id, user_id, cat_name, category_cats, date_cat,
-                       satiety, mood, image_cats, age_days, last_age_update, last_satiety_update, trust, last_feed_time
+                       satiety, mood, image_cats, age_days, last_age_update, last_satiety_update, trust, last_feed_time, miska_risa
                 FROM waifu_cat WHERE user_id = ?
                 """,
                 (user_id,),
@@ -847,6 +904,7 @@ async def clear_all_waifus() -> int:
             return 0
         try:
             cursor = await conn.cursor()
+            await cursor.execute("DELETE FROM marriages")
             await cursor.execute("DELETE FROM waifu_cat")
             count = cursor.rowcount
             await conn.commit()
@@ -867,6 +925,7 @@ async def delete_waifu_by_user(user_id: int) -> bool:
             return False
         try:
             cursor = await conn.cursor()
+            await cursor.execute("DELETE FROM marriages WHERE cat_id IN (SELECT cats_id FROM waifu_cat WHERE user_id = ?)", (user_id,))
             await cursor.execute("DELETE FROM waifu_cat WHERE user_id = ?", (user_id,))
             count = cursor.rowcount
             await conn.commit()
@@ -903,7 +962,7 @@ async def add_user(user_id: int, nickname: str, username: str | None = None) -> 
             if existing_user:
                 # Гражданин уже существует, обновляем только username
                 await cursor.execute(
-                    "UPDATE users SET username = ? WHERE user_id = ?",
+                    "UPDATE users SET username = COALESCE(?, username) WHERE user_id = ?",
                     (username, user_id),
                 )
             else:
@@ -929,6 +988,99 @@ async def add_user(user_id: int, nickname: str, username: str | None = None) -> 
             await conn.commit()
         except Error as e:
             logger.error(f"Ошибка при добавлении гражданина {user_id}: {e}")
+
+
+async def claim_daily_food(user_id: int, item_key: str, item_name: str) -> bool:
+    """Claim once per UTC day; grant and timestamp commit together."""
+    async with await create_connection() as conn:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await conn.execute(
+            """UPDATE users SET last_food_received=? WHERE user_id=?
+            AND (last_food_received IS NULL OR substr(last_food_received,1,10) < ?)""",
+            (now, user_id, now[:10]),
+        )
+        if cursor.rowcount != 1:
+            return False
+        await conn.execute(
+            """INSERT INTO hebao_items(user_id,item_key,item_name,quantity,updated_at)
+            VALUES (?,?,?,5,?) ON CONFLICT(user_id,item_key) DO UPDATE SET
+            quantity=quantity+5, updated_at=excluded.updated_at""",
+            (user_id,item_key,item_name,now),
+        )
+        await conn.commit()
+        return True
+
+
+async def decay_waifu_satiety(user_id: int, now: datetime | None = None) -> dict | None:
+    """Re-read under the repository lock; preserve incomplete decay intervals."""
+    async with await create_connection() as conn:
+        waifu = await get_waifu_by_user(user_id)
+        if not waifu:
+            return None
+        now = now or datetime.now(timezone.utc)
+        try:
+            last = datetime.fromisoformat(waifu["last_satiety_update"])
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            return waifu
+        interval = timedelta(hours=min(12,5+(waifu.get("age_days") or 1)//30))
+        steps = int((now-last)//interval)
+        if steps > 0:
+            satiety = max(0,(waifu.get("satiety") or 0)-steps*10)
+            mood = "отличное" if satiety >= 70 else "хорошее" if satiety >= 40 else "среднее" if satiety >= 15 else "грустное"
+            timestamp = (last+steps*interval).isoformat()
+            await conn.execute(
+                "UPDATE waifu_cat SET satiety=?,mood=?,last_satiety_update=? WHERE user_id=?",
+                (satiety,mood,timestamp,user_id),
+            )
+            await conn.commit()
+            waifu.update(satiety=satiety,mood=mood,last_satiety_update=timestamp)
+        return waifu
+
+
+async def feed_waifu_atomic(user_id: int, satiety: int, trust_bonus: int,
+                            now: datetime | None = None,
+                            cooldown_hours: float = 3) -> dict:
+    """Serialize cooldown, inventory debit and cat state update as one unit."""
+    async with await create_connection() as conn:
+        now = now or datetime.now(timezone.utc)
+        waifu = await decay_waifu_satiety(user_id,now)
+        if not waifu:
+            return {"status":"no_cat"}
+        try:
+            last = datetime.fromisoformat(waifu["last_feed_time"])
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            remaining = cooldown_hours*3600-(now-last).total_seconds()
+        except (TypeError,ValueError):
+            remaining = 0
+        if remaining > 0 and (waifu.get("satiety") or 0) >= 15:
+            return {"status":"cooldown","remaining_seconds":remaining}
+        cursor = await conn.execute(
+            """SELECT item_key,quantity FROM hebao_items WHERE user_id=?
+            AND item_key IN ('korm_waifu','miska_risa') AND quantity>0
+            ORDER BY CASE item_key WHEN 'korm_waifu' THEN 0 ELSE 1 END LIMIT 1""",(user_id,),
+        )
+        item = await cursor.fetchone()
+        if item:
+            key,quantity = item
+            await conn.execute("UPDATE hebao_items SET quantity=quantity-1,updated_at=? WHERE user_id=? AND item_key=?",(now.isoformat(),user_id,key))
+        else:
+            legacy = await (await conn.execute("SELECT miska_risa FROM waifu_cat WHERE user_id=?",(user_id,))).fetchone()
+            if not legacy or (legacy[0] or 0) <= 0:
+                return {"status":"no_food","cat_name":waifu["cat_name"]}
+            key,quantity = "miska_risa",legacy[0]
+            await conn.execute("UPDATE waifu_cat SET miska_risa=miska_risa-1 WHERE user_id=?",(user_id,))
+        trust = min(100,(waifu.get("trust") or 0)+trust_bonus)
+        await conn.execute(
+            """UPDATE waifu_cat SET satiety=?,mood=?,trust=?,last_feed_time=?,
+            last_satiety_update=? WHERE user_id=?""",
+            (satiety,"отличное" if satiety>=70 else "хорошее",trust,now.isoformat(),now.isoformat(),user_id),
+        )
+        await conn.commit()
+        return {"status":"ok","cat_name":waifu["cat_name"],"trust":trust,
+                "item_key":key,"left_qty":quantity-1}
 
 
 async def can_receive_daily_food(user_id: int) -> bool:
@@ -1091,7 +1243,7 @@ async def delete_user_completely(username: str) -> bool:
             cursor = await conn.cursor()
 
             # Удаляем из всех таблиц
-            tables_to_clean = ["hebao_items", "waifu_cat", "admins", "users"]
+            tables_to_clean = ["marriages", "hebao_items", "waifu_cat", "admins", "user_warnings", "active_punishments", "punishment_history", "rating_history", "activity_daily", "users"]
             deleted_records = 0
 
             for table in tables_to_clean:
@@ -1813,6 +1965,12 @@ async def increment_user_activity(user_id: int) -> bool:
                     (user_id,),
                 )
 
+            await cursor.execute(
+                """INSERT INTO activity_daily(user_id,activity_date,messages)
+                VALUES (?,?,1) ON CONFLICT(user_id,activity_date)
+                DO UPDATE SET messages=messages+1""",
+                (user_id, datetime.now(timezone.utc).date().isoformat()),
+            )
             await conn.commit()
             return True
 
@@ -1893,8 +2051,16 @@ async def get_daily_top(limit: int = 5) -> list[aiosqlite.Row]:
 
 async def get_monthly_top(limit: int = 30) -> list[aiosqlite.Row]:
     """Получает топ граждан по активности за текущий месяц."""
-    # Пока что возвращаем общий топ, но в будущем можно добавить логику по месяцам
-    return await get_chat_leaderboard(limit)
+    async with await create_connection() as conn:
+        cursor = await conn.execute(
+            """SELECT u.nickname, SUM(a.messages) AS total
+            FROM activity_daily a JOIN users u ON u.user_id=a.user_id
+            WHERE a.activity_date >= ? AND a.activity_date <= ?
+            GROUP BY a.user_id ORDER BY total DESC LIMIT ?""",
+            (datetime.now(timezone.utc).date().replace(day=1).isoformat(),
+             datetime.now(timezone.utc).date().isoformat(), limit),
+        )
+        return await cursor.fetchall()
 
 
 async def get_rate_status(user_id: int) -> str:
@@ -1991,7 +2157,7 @@ async def add_warning(user_id: int, chat_id: int, reason: str, warned_by: int) -
             # Добавляем предупреждение
             await cursor.execute(
                 """
-                INSERT OR REPLACE INTO user_warnings (user_id, chat_id, reason, warned_by, warned_at)
+                INSERT INTO user_warnings (user_id, chat_id, reason, warned_by, warned_at)
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (
@@ -2040,18 +2206,18 @@ async def remove_warning(user_id: int, chat_id: int, removed_by: int) -> bool:
 
             # Получаем информацию о предупреждении перед удалением
             await cursor.execute(
-                "SELECT reason FROM user_warnings WHERE user_id = ? AND chat_id = ?",
+                "SELECT id, reason FROM user_warnings WHERE user_id = ? AND chat_id = ? ORDER BY id DESC LIMIT 1",
                 (user_id, chat_id),
             )
             warning = await cursor.fetchone()
 
             if warning:
-                reason = warning[0]
+                reason = warning[1]
 
                 # Удаляем предупреждение
                 await cursor.execute(
-                    "DELETE FROM user_warnings WHERE user_id = ? AND chat_id = ?",
-                    (user_id, chat_id),
+                    "DELETE FROM user_warnings WHERE id = ?",
+                    (warning[0],),
                 )
 
                 # Добавляем в историю наказаний

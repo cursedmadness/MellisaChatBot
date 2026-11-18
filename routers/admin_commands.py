@@ -3,6 +3,7 @@ from aiogram.filters.command import Command, CommandObject
 from aiogram.types import Message
 from aiogram.exceptions import TelegramBadRequest
 from aiogram import Bot
+from html import escape
 import logging
 import asyncio
 
@@ -20,6 +21,7 @@ from database import (
     add_admin,
     remove_admin,
     get_user_rate,
+    get_user_profile,
     update_user_rate,
     unrate_user,
     add_user,
@@ -60,7 +62,8 @@ async def _ensure_user_exists(user_id: int, first_name: str | None = None) -> No
     Гарантирует наличие Гражданина в таблице users,
     чтобы обновление рейтинга не пропускало запись.
     """
-    await add_user(user_id, first_name or "Гражданин")
+    if await get_user_profile(user_id) is None:
+        await add_user(user_id, first_name or "Гражданин")
 
 
 # Роутер на добавление главаа
@@ -152,7 +155,7 @@ async def _modify_rate(
                 if not target_id:
                     # Пользователь указан, но не найден
                     await message.reply(
-                        f"❌ Гражданин '{parts[1]}' не найден в системе."
+                        f"❌ Гражданин '{escape(str(parts[1]))}' не найден в системе."
                     )
                     return
                 target_name = parts[1]
@@ -168,7 +171,9 @@ async def _modify_rate(
                 target_name = message.from_user.first_name
 
             await _ensure_user_exists(target_id, target_name)
-            old_rate = await get_user_rate(target_id) or 100
+            old_rate = await get_user_rate(target_id)
+            if old_rate is None:
+                old_rate = 100
             diff = rate_amount * multiply
             new_rate = old_rate + diff
 
@@ -222,7 +227,7 @@ async def rating_history_command(
 
         if not history:
             await message.answer(
-                f"В архивах Партии пока нет записей об изменении рейтинга гражданина {target_name}."
+                f"В архивах Партии пока нет записей об изменении рейтинга гражданина {escape(str(target_name))}."
             )
             return
 
@@ -299,7 +304,7 @@ async def rating_history_command(
         photo = BufferedInputFile(buf.read(), filename="rating_history.png")
         await message.answer_photo(
             photo,
-            caption=f"📈 <b>Мониторинг лояльности</b>\nГражданин: {target_name}\nЗаписей в архиве: {len(history)}\nТекущий рейтинг: {ratings[-1]}",
+            caption=f"📈 <b>Мониторинг лояльности</b>\nГражданин: {escape(str(target_name))}\nЗаписей в архиве: {len(history)}\nТекущий рейтинг: {ratings[-1]}",
         )
 
     except Exception as e:
@@ -359,10 +364,10 @@ async def delete_user_command(message: Message, command: CommandObject = None) -
         success = await delete_user_completely(username)
         if success:
             await message.reply(
-                f"✅ Гражданин @{username} полностью удален из системы."
+                f"✅ Гражданин @{escape(str(username))} полностью удален из системы."
             )
         else:
-            await message.reply(f"❌ Гражданин @{username} не найден.")
+            await message.reply(f"❌ Гражданин @{escape(str(username))} не найден.")
     except Exception as e:
         logger.error(f"Ошибка в delete_user_command: {e}")
         await message.answer("Ошибка при удалении пользователя.")
@@ -418,7 +423,7 @@ async def moderation_status_command(message: Message):
     status_msg += "• /варн - выдать предупреждение\n"
     status_msg += "• /снять_варн - снять предупреждение\n"
     status_msg += "• /наказания - просмотреть наказания\n"
-    status_msg += "• /рассылка <текст> - массовая рассылка гражданам\n"
+    status_msg += "• /рассылка &lt;текст&gt; - массовая рассылка гражданам\n"
 
     await message.reply(status_msg)
 
@@ -461,7 +466,7 @@ async def broadcast_command(
         broadcast_text = (
             "📢 <b>ВАЖНОЕ СООБЩЕНИЕ ОТ ПАРТИИ:</b>\n"
             "────────────────────\n\n"
-            f"{args_text}"
+            f"{escape(str(args_text))}"
         )
 
         for i, user in enumerate(users):

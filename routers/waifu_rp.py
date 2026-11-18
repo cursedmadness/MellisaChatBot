@@ -1,5 +1,6 @@
 import random
 import logging
+from html import escape
 from routers.weather_service import get_coordinates, get_weather
 from database import get_user_nickname, get_user_city
 
@@ -43,7 +44,7 @@ async def generate_waifu_rp_message(user_id: int, cat_name: str) -> str:
     if city:
         try:
             lat, lon = await get_coordinates(city)
-            if lat and lon:
+            if lat is not None and lon is not None:
                 weather_data = await get_weather(lat, lon)
                 if weather_data:
                     temp_value = weather_data["main"]["temp"]
@@ -70,8 +71,8 @@ async def generate_waifu_rp_message(user_id: int, cat_name: str) -> str:
     template = random.choice(templates)
     
     # Экранируем HTML чтобы парсер не ругался (или тут мы используем markdown/HTML)
-    c_name = f"<b>{cat_name}</b>"
+    c_name = f"<b>{escape(cat_name)}</b>"
     
-    city_str = str(city).capitalize() if city else "твоём городе"
+    city_str = escape(str(city).capitalize()) if city else "твоём городе"
     
-    return template.format(cat_name=c_name, nickname=nickname, city=city_str)
+    return template.format(cat_name=c_name, nickname=escape(nickname), city=city_str)

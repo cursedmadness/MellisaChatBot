@@ -1,6 +1,7 @@
 import re
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from html import escape
 from aiogram import Router, F, Bot
 from aiogram.types import Message, ChatPermissions
 from aiogram.filters import Command, CommandObject
@@ -37,19 +38,55 @@ async def moderator_filter(message: Message) -> bool:
     
     try:
         member = await message.chat.get_member(message.from_user.id)
-        if member.status in ["administrator", "creator"]:
+        if member.status == "creator":
             return True
+        if member.status == "administrator":
+            return bool(member.can_restrict_members)
     except Exception as e:
         logger.error(f"Ошибка проверки прав модератора: {e}")
     
     return False
 
-moderation_router.message.filter(F.chat.type.in_(["group", "supergroup"]), moderator_filter)
+def parse_moderation_args(message: Message, command: CommandObject | None,
+                          target_user_id: int) -> tuple[int | None, str]:
+    """Separate the target from a duration (bare numbers mean minutes)."""
+    if command:
+        text = command.args or ""
+    else:
+        parts = (message.text or "").split(maxsplit=1)
+        text = parts[1] if len(parts) > 1 else ""
+    parts = text.strip().split(maxsplit=1)
+    if parts:
+        target = parts[0]
+        is_mention = target.startswith(("@", "t.me/", "https://t.me/", "http://t.me/"))
+        is_id = (not message.reply_to_message and target.isdigit()
+                 and int(target) == target_user_id)
+        if is_mention or is_id:
+            text = parts[1] if len(parts) > 1 else ""
+    pattern = r"(?i)(?<!\w)(\d+)\s*(мин\w*|час\w*|дн\w*|день|дней|нед\w*)\b|\b(час)\b"
+    match = re.search(pattern, text)
+    duration = None
+    if match:
+        if match.group(3):
+            duration = 60
+        else:
+            value, unit = int(match.group(1)), match.group(2).lower()
+            factor = 1 if unit.startswith("мин") else 60 if unit.startswith("час") else 10080 if unit.startswith("нед") else 1440
+            duration = value * factor
+    else:
+        match = re.search(r"(?<!\S)\d+(?!\S)", text)
+        if match:
+            duration = int(match.group())
+    if duration is not None and not 1 <= duration <= 366 * 24 * 60:
+        raise ValueError("Срок наказания должен быть от 1 минуты до 366 дней.")
+    if match:
+        text = text[:match.start()] + text[match.end():]
+    return duration, text.strip() or "Не указана"
 
 
 
-@moderation_router.message(Command("бан"))
-@moderation_router.message(F.text.lower().regexp(r"^бан(\s|$)"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, Command("бан"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, F.text.lower().regexp(r"^бан(\s|$)"))
 async def ban_command(message: Message, bot: Bot, command: CommandObject = None) -> None:
     try:
         # Извлекаем пользователя
@@ -65,49 +102,15 @@ async def ban_command(message: Message, bot: Bot, command: CommandObject = None)
             await message.reply("❌ Партия не одобряет самовыпил.")
             return
 
-        # Извлекаем причину и срок
-        duration_minutes = None
-        reason = "Не указана"
-        
-        text_to_parse = command.args if command else message.text
-        if not command and text_to_parse and text_to_parse.lower().startswith("бан"):
-            text_to_parse = text_to_parse[3:].strip()
-            
-        if text_to_parse:
-            time_pattern = r"(?i)\b(\d+)\s*(мин\w*|час\w*|дн\w*|день|дней|нед\w*)|(?:(час)\b)"
-            match = re.search(time_pattern, text_to_parse)
-            if match:
-                if match.group(3): # "час" без числа
-                    duration_minutes = 60
-                else:
-                    value = int(match.group(1))
-                    unit = match.group(2).lower()
-                    if unit.startswith("мин"):
-                        duration_minutes = value
-                    elif unit.startswith("час"):
-                        duration_minutes = value * 60
-                    elif unit.startswith("дн") or unit == "день" or unit == "дней":
-                        duration_minutes = value * 60 * 24
-                    elif unit.startswith("нед"):
-                        duration_minutes = value * 60 * 24 * 7
-                
-                # Убираем найденное время из текста
-                text_to_parse = text_to_parse[:match.start()] + text_to_parse[match.end():]
-            elif any(part.isdigit() for part in text_to_parse.split()):
-                for part in text_to_parse.split():
-                    if part.isdigit():
-                        duration_minutes = int(part)
-                        text_to_parse = text_to_parse.replace(part, "", 1)
-                        break
-            
-            # Очищаем причину от упоминаний (@username)
-            clean_reason = re.sub(r"@[a-zA-Z0-9_]+", "", text_to_parse).strip()
-            if clean_reason:
-                reason = clean_reason
+        try:
+            duration_minutes, reason = parse_moderation_args(message, command, target_user_id)
+        except ValueError as e:
+            await message.reply(f"❌ {escape(str(e))}")
+            return
 
         until_date_obj = None
         if duration_minutes:
-            until_date_obj = datetime.now() + timedelta(minutes=duration_minutes)
+            until_date_obj = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
 
         try:
             await message.chat.ban(user_id=target_user_id, until_date=until_date_obj)
@@ -145,7 +148,7 @@ async def ban_command(message: Message, bot: Bot, command: CommandObject = None)
                 until_date = "окончания блокировки"
             
             await message.reply(
-                f"🌲 Смотритель {message.from_user.first_name} заблокировал гражданина {target_name}\n"
+                f"🌲 Смотритель {escape(str(message.from_user.first_name))} заблокировал гражданина {target_name}\n"
                 f"Воля партии – исправительное перевоспитание.\n"
                 f"Дождитесь {until_date} и приходите ещё!"
             )
@@ -154,7 +157,7 @@ async def ban_command(message: Message, bot: Bot, command: CommandObject = None)
             try:
                 await bot.send_message(
                     target_user_id,
-                    f"🌲Смотритель {message.from_user.first_name} заблокировал гражданина {target_name}\n"
+                    f"🌲Смотритель {escape(str(message.from_user.first_name))} заблокировал гражданина {target_name}\n"
                     f"Воля партии – исправительное перевоспитание.\n"
                     f"Дождитесь {until_date} и приходите ещё!"
                 )
@@ -162,14 +165,14 @@ async def ban_command(message: Message, bot: Bot, command: CommandObject = None)
                 pass
         except Exception as e:
             logger.error(f"Ошибка бана гражданина {target_user_id}: {e}")
-            await message.reply(f"❌ Ошибка: {str(e)}")
+            await message.reply(f"❌ Ошибка: {escape(str(e))}")
     except Exception as e:
         logger.error(f"Глобальная ошибка в ban_command: {e}")
         await message.answer("Произошла ошибка при выполнении команды бана.")
 
 
-@moderation_router.message(Command("разбан"))
-@moderation_router.message(F.text.lower().startswith("разбан"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, Command("разбан"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, F.text.lower().startswith("разбан"))
 async def unban_command(message: Message, bot: Bot) -> None:
     """
     Разбанивает пользователя в чате и удаляет запись о бане из БД.
@@ -185,7 +188,7 @@ async def unban_command(message: Message, bot: Bot) -> None:
 
         try:
             # Разбаниваем в Telegram (снятие ограничений)
-            await message.chat.unban(user_id=target_user_id)
+            await message.chat.unban(user_id=target_user_id, only_if_banned=True)
             
             # Удаляем запись о бане из активных наказаний в БД
             removed = await remove_punishment(target_user_id, message.chat.id, "ban", message.from_user.id)
@@ -197,7 +200,7 @@ async def unban_command(message: Message, bot: Bot) -> None:
                 try:
                     await bot.send_message(
                         target_user_id,
-                        f"🕊️ Вы были <b>разбанены</b> в чате <b>{message.chat.title}</b>! Теперь вы снова можете общаться."
+                        f"🕊️ Вы были <b>разбанены</b> в чате <b>{escape(str(message.chat.title))}</b>! Теперь вы снова можете общаться."
                     )
                 except Exception:
                     pass
@@ -206,12 +209,12 @@ async def unban_command(message: Message, bot: Bot) -> None:
                 
         except Exception as e:
             logger.error(f"Ошибка разбана пользователя {target_user_id}: {e}")
-            await message.reply(f"❌ Ошибка при разбане: {str(e)}")
+            await message.reply(f"❌ Ошибка при разбане: {escape(str(e))}")
     except Exception as e:
         logger.error(f"Глобальная ошибка в unban_command: {e}")
         await message.answer("Ошибка выполнения команды разбана.")
 
-@moderation_router.message(Command("мут"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, Command("мут"))
 async def mute_command(message: Message, bot: Bot, command: CommandObject = None) -> None:
     try:
         target_user_id = await resolve_user_id(message)
@@ -224,22 +227,15 @@ async def mute_command(message: Message, bot: Bot, command: CommandObject = None
             await message.reply("❌ Обратитесь к партии с запросом о запрете речи")
             return
 
-        duration_minutes = None
-        reason = "Не указана"
-
-        if command and command.args:
-            parts = command.args.split()
-            # Ищем число (минуты) в конце или середине
-            for part in parts:
-                if part.isdigit():
-                    duration_minutes = int(part)
-                    break
-            # Остальное - причина (упрощенно)
-            reason = command.args
+        try:
+            duration_minutes, reason = parse_moderation_args(message, command, target_user_id)
+        except ValueError as e:
+            await message.reply(f"❌ {escape(str(e))}")
+            return
 
         until_date = None
         if duration_minutes:
-            until_date = datetime.now() + timedelta(minutes=duration_minutes)
+            until_date = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
 
         try:
             await message.chat.restrict(
@@ -258,19 +254,19 @@ async def mute_command(message: Message, bot: Bot, command: CommandObject = None
             try:
                 await bot.send_message(
                     target_user_id,
-                    f"🤐 Партия временно закрыла вам чат <b>{message.chat.title}</b> {dur_text}.\n"
-                    f"📝 Причина: {reason}"
+                    f"🤐 Партия временно закрыла вам чат <b>{escape(str(message.chat.title))}</b> {dur_text}.\n"
+                    f"📝 Причина: {escape(str(reason))}"
                 )
             except Exception:
                 pass
         except Exception as e:
             logger.error(f"Ошибка мута гражданина {target_user_id}: {e}")
-            await message.reply(f"❌ Ошибка: {str(e)}")
+            await message.reply(f"❌ Ошибка: {escape(str(e))}")
     except Exception as e:
         logger.error(f"Глобальная ошибка в mute_command: {e}")
         await message.answer("Ошибка выполнения команды мута.")
 
-@moderation_router.message(Command("размут"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, Command("размут"))
 async def unmute_command(message: Message, bot: Bot) -> None:
     try:
         target_user_id = await resolve_user_id(message)
@@ -295,12 +291,12 @@ async def unmute_command(message: Message, bot: Bot) -> None:
             await message.reply(f"✅ Партия дает слово гражданину {target_name}!")
         except Exception as e:
             logger.error(f"Ошибка размута пользователя {target_user_id}: {e}")
-            await message.reply(f"❌ Ошибка: {str(e)}")
+            await message.reply(f"❌ Ошибка: {escape(str(e))}")
     except Exception as e:
         logger.error(f"Глобальная ошибка в unmute_command: {e}")
         await message.answer("Ошибка выполнения команды размута.")
 
-@moderation_router.message(Command("варн"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, Command("варн"))
 async def warn_command(message: Message, bot: Bot, command: CommandObject = None) -> None:
     try:
         target_user_id = await resolve_user_id(message)
@@ -330,9 +326,9 @@ async def warn_command(message: Message, bot: Bot, command: CommandObject = None
             try:
                 await bot.send_message(
                     target_user_id,
-                    f"⚠️ Вам выдано <b>предупреждение</b> в чате <b>{message.chat.title}</b>.\n"
+                    f"⚠️ Вам выдано <b>предупреждение</b> в чате <b>{escape(str(message.chat.title))}</b>.\n"
                     f"Всего предупреждений: <b>{count}</b>\n"
-                    f"📝 Причина: {reason}\n"
+                    f"📝 Причина: {escape(str(reason))}\n"
                     f"Штраф рейтинга: -50"
                 )
             except Exception:
@@ -342,7 +338,7 @@ async def warn_command(message: Message, bot: Bot, command: CommandObject = None
             if count >= 3:
                 try:
                     # Бан на неделю
-                    until_date = datetime.now() + timedelta(days=7)
+                    until_date = datetime.now(timezone.utc) + timedelta(days=7)
                     await message.chat.ban(user_id=target_user_id, until_date=until_date)
                     await add_punishment(target_user_id, message.chat.id, "ban", "3/3 предупреждения", message.bot.id, 10080)
                     await reset_user_rating(target_user_id)
@@ -358,7 +354,7 @@ async def warn_command(message: Message, bot: Bot, command: CommandObject = None
         logger.error(f"Глобальная ошибка в warn_command: {e}")
         await message.answer("Ошибка выполнения команды предупреждения.")
 
-@moderation_router.message(Command("снять_варн"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, Command("снять_варн"))
 async def unwarn_command(message: Message, bot: Bot) -> None:
     try:
         target_user_id = await resolve_user_id(message)
@@ -390,7 +386,7 @@ async def check_and_apply_auto_moderation(user_id: int, chat_id: int, bot: Bot) 
             punishments = await get_active_punishments(user_id, chat_id)
             if not any(p['type'] == 'mute' for p in punishments):
                 try:
-                    until_date = datetime.now() + timedelta(hours=1)
+                    until_date = datetime.now(timezone.utc) + timedelta(hours=1)
                     await bot.restrict_chat_member(
                         chat_id=chat_id,
                         user_id=user_id,
@@ -420,8 +416,8 @@ async def check_and_apply_auto_moderation(user_id: int, chat_id: int, bot: Bot) 
     except Exception as e:
         logger.error(f"Ошибка в check_and_apply_auto_moderation: {e}")
 
-@moderation_router.message(Command("банлист"))
-@moderation_router.message(F.text.lower() == "банлист")
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, Command("банлист"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, F.text.lower() == "банлист")
 async def chat_banlist_command(message: Message, bot: Bot) -> None:
     """Выводит список всех забаненных пользователей чата."""
     try:
@@ -434,20 +430,20 @@ async def chat_banlist_command(message: Message, bot: Bot) -> None:
             await message.reply("📋 В этом чате нет активных банов.")
             return
 
-        res = f"📋 <b>Список забаненных граждан чата {message.chat.title}:</b>\n\n"
+        res = f"📋 <b>Список забаненных граждан чата {escape(str(message.chat.title))}:</b>\n\n"
         for user in banned_users:
             name = user['nickname']
             reason = user['reason'] or "Не указана"
             expires = user['expires_at'][:16] if user['expires_at'] else "Перманентно"
-            res += f"• {name} | До: {expires}\n   Причина: {reason}\n"
+            res += f"• {escape(str(name))} | До: {escape(str(expires))}\n   Причина: {escape(str(reason))}\n"
         
         await message.answer(res)
     except Exception as e:
         logger.error(f"Ошибка в chat_banlist_command: {e}")
         await message.answer("Ошибка при загрузке банлиста.")
 
-@moderation_router.message(Command("красный_список"))
-@moderation_router.message(F.text.lower() == "красный список")
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, Command("красный_список"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, F.text.lower() == "красный список")
 async def chat_redlist_command(message: Message, bot: Bot) -> None:
     """Выводит список граждан с рейтингом > 800."""
     try:
@@ -458,14 +454,14 @@ async def chat_redlist_command(message: Message, bot: Bot) -> None:
 
         res = f"🔴 <b>Красный список почетных граждан:</b>\n\n"
         for user in users:
-            res += f"• {user['nickname']} | Рейтинг: {user['reputation']}\n"
+            res += f"• {escape(str(user['nickname']))} | Рейтинг: {escape(str(user['reputation']))}\n"
         
         await message.answer(res)
     except Exception as e:
         logger.error(f"Ошибка в chat_redlist_command: {e}")
 
-@moderation_router.message(Command("черный_список"))
-@moderation_router.message(F.text.lower() == "черный список")
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, Command("черный_список"))
+@moderation_router.message(F.chat.type.in_(["group", "supergroup"]), moderator_filter, F.text.lower() == "черный список")
 async def chat_blacklist_command(message: Message, bot: Bot) -> None:
     """Выводит список граждан с рейтингом < 150."""
     try:
@@ -476,7 +472,7 @@ async def chat_blacklist_command(message: Message, bot: Bot) -> None:
 
         res = f"⚫ <b>Черный список сомнительных граждан:</b>\n\n"
         for user in users:
-            res += f"• {user['nickname']} | Рейтинг: {user['reputation']}\n"
+            res += f"• {escape(str(user['nickname']))} | Рейтинг: {escape(str(user['reputation']))}\n"
         
         await message.answer(res)
     except Exception as e:
@@ -494,11 +490,11 @@ async def dm_ban_reason(message: Message) -> None:
         
         res = (
             f"🚫 <b>Информация о вашем бане:</b>\n\n"
-            f"📝 Причина: {details['reason']}\n"
-            f"👮 Модератор: {details['moderator_name']}\n"
+            f"📝 Причина: {escape(str(details['reason']))}\n"
+            f"👮 Модератор: {escape(str(details['moderator_name']))}\n"
         )
         if details['expires_at']:
-            res += f"⏳ Срок истекает: {details['expires_at'][:16]}"
+            res += f"⏳ Срок истекает: {escape(str(details['expires_at'][:16]))}"
         else:
             res += "⏳ Срок: Перманентно"
         
@@ -518,11 +514,11 @@ async def dm_mute_reason(message: Message) -> None:
         
         res = (
             f"🤐 <b>Информация о вашем муте:</b>\n\n"
-            f"📝 Причина: {details['reason']}\n"
-            f"👮 Модератор: {details['moderator_name']}\n"
+            f"📝 Причина: {escape(str(details['reason']))}\n"
+            f"👮 Модератор: {escape(str(details['moderator_name']))}\n"
         )
         if details['expires_at']:
-            res += f"⏳ Срок истекает: {details['expires_at'][:16]}"
+            res += f"⏳ Срок истекает: {escape(str(details['expires_at'][:16]))}"
         else:
             res += "⏳ Срок: Перманентно"
         

@@ -2,6 +2,7 @@ from aiogram import Router, F
 from aiogram.filters.command import Command, CommandObject
 from aiogram.types import Message
 import logging
+from html import escape
 
 from database import get_hebao_overview
 from routers.utils import extract_target_user, resolve_user_id, get_user_display_name
@@ -24,7 +25,8 @@ def _format_hebao_message(user_id: int, user_display: str, items: list[dict], is
         header = "🎒 <b>У тебя в хэбао есть:</b>\n"
         empty_msg = "🎒 <b>У тебя в хэбао пусто.</b>"
     else:
-        user_link = f"<a href='tg://user?id={user_id}'>{user_display}</a>"
+        # get_user_display_name уже возвращает безопасную HTML-ссылку.
+        user_link = user_display
         header = f"🎒 <b>У {user_link} в хэбао есть:</b>\n"
         empty_msg = f"🎒 <b>У {user_link} в хэбао пусто.</b>"
 
@@ -46,7 +48,7 @@ def _format_hebao_message(user_id: int, user_display: str, items: list[dict], is
         if display_name.lower() == item_key.lower():
             display_name = pretty_name
 
-        lines.append(f"  {icon} <b>{display_name}</b> ({qty})")
+        lines.append(f"  {icon} <b>{escape(display_name)}</b> ({qty})")
         
     return "\n".join(lines)
 
