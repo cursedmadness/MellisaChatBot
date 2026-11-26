@@ -174,6 +174,20 @@ class ShelterRepoTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(items["korm_waifu"], 4)
         self.assertEqual(items["miska_risa"], 30)
 
+    async def test_legacy_entry_backfilled_before_extension(self):
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        await db.upsert_hebao_item(1, "miska_risa", "рис", set_value=30)
+        await db.place_in_shelter_atomic(1, 3, now=start)  # 9 риса
+        # Имитируем запись, созданную до появления учёта платежей.
+        await self.client.execute("DELETE FROM shelter_payments")
+        await self.client.commit()
+        await db.extend_shelter_atomic(1, 2, now=start)  # +6 риса
+        result = await db.take_from_shelter_atomic(1, now=start)
+        self.assertEqual(result["unused_days"], 5)
+        self.assertEqual(result["refunded"], {"miska_risa": 15})
+        items = {i["item_key"]: i["quantity"] for i in await db.get_hebao_items(1)}
+        self.assertEqual(items["miska_risa"], 30)
+
     async def test_no_refund_after_full_term(self):
         start = datetime(2026, 1, 1, tzinfo=timezone.utc)
         await db.upsert_hebao_item(1, "korm_waifu", "корм", set_value=4)

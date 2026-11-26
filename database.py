@@ -1298,6 +1298,28 @@ async def place_in_shelter_atomic(
         }
 
 
+async def _backfill_legacy_payment(conn, entry: dict) -> None:
+    """Восстанавливает платёж для записи, созданной до учёта платежей."""
+    cursor = await conn.execute(
+        "SELECT 1 FROM shelter_payments WHERE shelter_id=? LIMIT 1", (entry["id"],)
+    )
+    if await cursor.fetchone():
+        return
+    key = entry.get("food_key")
+    days = int(entry.get("days") or 0)
+    paid = int(entry.get("food_paid") or 0)
+    if key not in SHELTER_PRICES or days <= 0 or paid <= 0:
+        return
+    await _record_shelter_payment(
+        conn,
+        entry["id"],
+        key,
+        paid,
+        days,
+        datetime.now(timezone.utc),
+    )
+
+
 async def extend_shelter_atomic(
     user_id: int, days: int, now: datetime | None = None
 ) -> dict:
@@ -1333,6 +1355,7 @@ async def extend_shelter_atomic(
             WHERE id=?""",
             (total_days, expires.isoformat(), food_key, payment["paid"], entry["id"]),
         )
+        await _backfill_legacy_payment(conn, entry)
         await _record_shelter_payment(
             conn, entry["id"], payment["ok"], payment["paid"], int(days), now
         )
