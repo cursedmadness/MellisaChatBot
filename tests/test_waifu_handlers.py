@@ -55,11 +55,23 @@ class WaifuHandlersTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_food_claim_uses_persistent_user_and_atomic_claim(self):
         msg = message()
-        with patch.object(waifu, "add_user", AsyncMock()) as add, patch.object(waifu, "claim_daily_food", AsyncMock(return_value=False)) as claim:
+        with patch.object(waifu, "add_user", AsyncMock()) as add, \
+             patch.object(waifu, "is_cat_in_shelter", AsyncMock(return_value=False)), \
+             patch.object(waifu, "claim_daily_food", AsyncMock(return_value=False)) as claim:
             await waifu.get_daily_food_command(msg)
         add.assert_awaited_once_with(1, "Alice", "alice")
         self.assertEqual(claim.await_count, 1)
+        self.assertEqual(claim.await_args.kwargs["amount"], 5)
         self.assertIn("уже получали", msg.answer.await_args.args[0])
+
+    async def test_food_claim_reduced_while_cat_in_shelter(self):
+        msg = message()
+        with patch.object(waifu, "add_user", AsyncMock()), \
+             patch.object(waifu, "is_cat_in_shelter", AsyncMock(return_value=True)), \
+             patch.object(waifu, "claim_daily_food", AsyncMock(return_value=True)) as claim:
+            await waifu.get_daily_food_command(msg)
+        self.assertEqual(claim.await_args.kwargs["amount"], 2)
+        self.assertIn("в приюте", msg.answer.await_args.args[0])
 
     def test_profile_escapes_names(self):
         text = waifu._format_waifu_profile({"cat_name": "<bad>", "mood": "<&>"})

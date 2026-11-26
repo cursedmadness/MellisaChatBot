@@ -26,7 +26,9 @@ from database import (
     clear_all_waifus,
     is_admin,
     delete_waifu_by_user,
+    is_cat_in_shelter,
 )
+from config import DAILY_FOOD_AMOUNT, DAILY_FOOD_AMOUNT_IN_SHELTER
 from routers.utils import (
     extract_user_from_text,
     resolve_user_id,
@@ -632,18 +634,31 @@ async def get_daily_food_command(message: Message) -> None:
 
         # Регистрация нужна, чтобы у каждой выдачи был постоянный кулдаун.
         await add_user(user_id, message.from_user.first_name or "гражданин", message.from_user.username)
+
+        # Пока кошка в приюте, выдача меньше: расход еды нулевой, иначе это фарм.
+        sheltered = await is_cat_in_shelter(user_id)
+        amount = (
+            DAILY_FOOD_AMOUNT_IN_SHELTER if sheltered else DAILY_FOOD_AMOUNT
+        )
+
         item_key = "korm_waifu" if random.random() < 0.5 else "miska_risa"
         item_name = "корм кошко-жены" if item_key == "korm_waifu" else "миска риса"
         item_icon = "🥫" if item_key == "korm_waifu" else "🍚"
-        if not await claim_daily_food(user_id, item_key, item_name):
+        if not await claim_daily_food(user_id, item_key, item_name, amount=amount):
             await message.answer("🐾 Вы уже получали еду сегодня! Возвращайтесь завтра.")
             return
 
+        shelter_note = (
+            "\n<i>Пока кошка в приюте, кладовая выдаёт меньше: расход еды сейчас нулевой.</i>"
+            if sheltered
+            else ""
+        )
         await message.answer(
             f"🎁 <b>Бесплатная еда получена!</b>\n\n"
             f"Вы заглянули в кладовую и взяли:\n"
-            f"{item_icon} <b>{item_name}</b> (5 шт.)\n\n"
-            f"<i>Заглядывайте завтра за новой порцией!</i>",
+            f"{item_icon} <b>{item_name}</b> ({amount} шт.)\n\n"
+            f"<i>Заглядывайте завтра за новой порцией!</i>"
+            f"{shelter_note}",
             parse_mode="HTML",
         )
     except Exception as e:

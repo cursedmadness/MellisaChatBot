@@ -7,6 +7,7 @@ import logging
 
 from config import (
     MAX_RICE_PER_USER,
+    DAILY_FOOD_AMOUNT,
     SHELTER_MAX_DAYS,
     SHELTER_PRICE_KORM_PER_DAY,
     SHELTER_PRICE_RICE_PER_DAY,
@@ -290,6 +291,22 @@ async def add_new_columns() -> None:
                 )
                 await cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_shelter_expires ON shelter(returned_at, expires_at)"
+                )
+
+                # Платежи приюта: нужны, чтобы вернуть еду за неиспользованные дни
+                await cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS shelter_payments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        shelter_id INTEGER NOT NULL,
+                        item_key TEXT NOT NULL,
+                        quantity INTEGER NOT NULL,
+                        days INTEGER NOT NULL,
+                        paid_at TEXT NOT NULL
+                    )
+                """)
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_shelter_payments "
+                    "ON shelter_payments(shelter_id)"
                 )
 
                 # Таблица для активных наказаний
@@ -1025,8 +1042,11 @@ async def add_user(user_id: int, nickname: str, username: str | None = None) -> 
             logger.error(f"Ошибка при добавлении гражданина {user_id}: {e}")
 
 
-async def claim_daily_food(user_id: int, item_key: str, item_name: str) -> bool:
+async def claim_daily_food(
+    user_id: int, item_key: str, item_name: str, amount: int | None = None
+) -> bool:
     """Выдаёт еду раз в сутки по UTC: начисление и отметка времени коммитятся вместе."""
+    quantity = DAILY_FOOD_AMOUNT if amount is None else max(int(amount), 0)
     async with await create_connection() as conn:
         now = datetime.now(timezone.utc).isoformat()
         cursor = await conn.execute(
@@ -1038,9 +1058,9 @@ async def claim_daily_food(user_id: int, item_key: str, item_name: str) -> bool:
             return False
         await conn.execute(
             """INSERT INTO hebao_items(user_id,item_key,item_name,quantity,updated_at)
-            VALUES (?,?,?,5,?) ON CONFLICT(user_id,item_key) DO UPDATE SET
-            quantity=quantity+5, updated_at=excluded.updated_at""",
-            (user_id,item_key,item_name,now),
+            VALUES (?,?,?,?,?) ON CONFLICT(user_id,item_key) DO UPDATE SET
+            quantity=quantity+excluded.quantity, updated_at=excluded.updated_at""",
+            (user_id,item_key,item_name,quantity,now),
         )
         await conn.commit()
         return True
@@ -1139,6 +1159,11 @@ async def feed_waifu_atomic(user_id: int, satiety: int, trust_bonus: int,
 SHELTER_PRICES = {
     "korm_waifu": SHELTER_PRICE_KORM_PER_DAY,
     "miska_risa": SHELTER_PRICE_RICE_PER_DAY,
+}
+
+SHELTER_ITEM_NAMES = {
+    "korm_waifu": "корм кошко-жены",
+    "miska_risa": "миска риса",
 }
 
 _SHELTER_COLUMNS = (
@@ -1243,7 +1268,7 @@ async def place_in_shelter_atomic(
             }
 
         expires = now + timedelta(days=days)
-        await conn.execute(
+        cursor = await conn.execute(
             """INSERT INTO shelter
             (user_id, cat_id, cat_name, placed_at, days, expires_at, food_key, food_paid)
             VALUES (?,?,?,?,?,?,?,?)""",
@@ -1257,6 +1282,9 @@ async def place_in_shelter_atomic(
                 payment["ok"],
                 payment["paid"],
             ),
+        )
+        await _record_shelter_payment(
+            conn, cursor.lastrowid, payment["ok"], payment["paid"], int(days), now
         )
         await conn.commit()
         return {
@@ -1305,6 +1333,9 @@ async def extend_shelter_atomic(
             WHERE id=?""",
             (total_days, expires.isoformat(), food_key, payment["paid"], entry["id"]),
         )
+        await _record_shelter_payment(
+            conn, entry["id"], payment["ok"], payment["paid"], int(days), now
+        )
         await conn.commit()
         return {
             "status": "ok",
@@ -1317,11 +1348,97 @@ async def extend_shelter_atomic(
         }
 
 
+async def _record_shelter_payment(
+    conn, shelter_id: int, item_key: str, quantity: int, days: int, now: datetime
+) -> None:
+    """Запоминает платёж, чтобы потом вернуть еду за неиспользованные дни."""
+    await conn.execute(
+        """INSERT INTO shelter_payments (shelter_id, item_key, quantity, days, paid_at)
+        VALUES (?,?,?,?,?)""",
+        (shelter_id, item_key, int(quantity), int(days), now.isoformat()),
+    )
+
+
+def _unused_days(entry: dict, now: datetime) -> int:
+    """Сколько полных оплаченных суток не потрачено. Начатые сутки считаются использованными."""
+    try:
+        placed = datetime.fromisoformat(entry["placed_at"])
+        if placed.tzinfo is None:
+            placed = placed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError, KeyError):
+        return 0
+    total_days = int(entry.get("days") or 0)
+    elapsed = (now - placed).total_seconds()
+    if elapsed <= 0:
+        return total_days
+    used = int(elapsed // 86400) + (1 if elapsed % 86400 else 0)
+    return max(0, total_days - used)
+
+
+async def _refund_unused_days(conn, entry: dict, unused: int) -> dict[str, int]:
+    """Возвращает еду за неиспользованные сутки, начиная с последних оплат."""
+    if unused <= 0:
+        return {}
+
+    cursor = await conn.execute(
+        """SELECT item_key, quantity, days FROM shelter_payments
+        WHERE shelter_id=? ORDER BY id DESC""",
+        (entry["id"],),
+    )
+    payments = await cursor.fetchall()
+    if not payments:
+        # Старые записи без истории платежей: считаем по сохранённой сумме.
+        key = entry.get("food_key")
+        days = int(entry.get("days") or 0)
+        paid = int(entry.get("food_paid") or 0)
+        if key not in SHELTER_PRICES or days <= 0:
+            return {}
+        payments = [(key, paid, days)]
+
+    refunded: dict[str, int] = {}
+    remaining = unused
+    for item_key, quantity, days in payments:
+        if remaining <= 0:
+            break
+        days = int(days or 0)
+        if days <= 0:
+            continue
+        take = min(remaining, days)
+        amount = (int(quantity) // days) * take
+        remaining -= take
+        if amount > 0:
+            refunded[item_key] = refunded.get(item_key, 0) + amount
+
+    if not refunded:
+        return {}
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for item_key, amount in refunded.items():
+        await conn.execute(
+            """INSERT INTO hebao_items(user_id,item_key,item_name,quantity,updated_at)
+            VALUES (?,?,?,?,?) ON CONFLICT(user_id,item_key) DO UPDATE SET
+            quantity=hebao_items.quantity+excluded.quantity,
+            updated_at=excluded.updated_at""",
+            (
+                entry["user_id"],
+                item_key,
+                SHELTER_ITEM_NAMES.get(item_key, item_key),
+                amount,
+                now_iso,
+            ),
+        )
+    return refunded
+
+
 async def _return_cat_from_shelter(conn, entry: dict, now: datetime) -> dict:
-    """Закрывает запись приюта и возвращает кошке силы."""
+    """Закрывает запись приюта, возвращает кошке силы и остаток оплаты."""
     await conn.execute(
         "UPDATE shelter SET returned_at=? WHERE id=?", (now.isoformat(), entry["id"])
     )
+
+    unused = _unused_days(entry, now)
+    refunded = await _refund_unused_days(conn, entry, unused)
+
     cursor = await conn.execute(
         "SELECT satiety FROM waifu_cat WHERE user_id=?", (entry["user_id"],)
     )
@@ -1334,7 +1451,13 @@ async def _return_cat_from_shelter(conn, entry: dict, now: datetime) -> dict:
             WHERE user_id=?""",
             (satiety, satiety_mood(satiety), now.isoformat(), entry["user_id"]),
         )
-    return {"user_id": entry["user_id"], "cat_name": entry["cat_name"], "satiety": satiety}
+    return {
+        "user_id": entry["user_id"],
+        "cat_name": entry["cat_name"],
+        "satiety": satiety,
+        "unused_days": unused,
+        "refunded": refunded,
+    }
 
 
 async def take_from_shelter_atomic(

@@ -65,3 +65,7 @@ SHELTER_MAX_DAYS = 30  # Максимальный срок пребывания 
 SHELTER_PRICE_KORM_PER_DAY = 2  # Корма за сутки
 SHELTER_PRICE_RICE_PER_DAY = 3  # Мисок риса за сутки
 SHELTER_RETURN_SATIETY_BONUS = 20  # Сытость, которую кошка набирает в приюте
+
+# Ежедневная бесплатная еда
+DAILY_FOOD_AMOUNT = 5  # Обычная выдача
+DAILY_FOOD_AMOUNT_IN_SHELTER = 2  # Выдача, пока кошка в приюте

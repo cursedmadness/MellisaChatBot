@@ -16,6 +16,8 @@ def load_database():
     config.SHELTER_PRICE_KORM_PER_DAY = 2
     config.SHELTER_PRICE_RICE_PER_DAY = 3
     config.SHELTER_RETURN_SATIETY_BONUS = 20
+    config.DAILY_FOOD_AMOUNT = 5
+    config.DAILY_FOOD_AMOUNT_IN_SHELTER = 2
     spec = importlib.util.spec_from_file_location("database_under_test", Path(__file__).resolve().parents[1] / "database.py")
     module = importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules, {"config": config}):

@@ -19,6 +19,8 @@ def load_database():
     config.SHELTER_PRICE_KORM_PER_DAY = 2
     config.SHELTER_PRICE_RICE_PER_DAY = 3
     config.SHELTER_RETURN_SATIETY_BONUS = 20
+    config.DAILY_FOOD_AMOUNT = 5
+    config.DAILY_FOOD_AMOUNT_IN_SHELTER = 2
     spec = importlib.util.spec_from_file_location(
         "database_shelter_under_test", Path(__file__).resolve().parents[1] / "database.py"
     )
@@ -131,6 +133,56 @@ class ShelterRepoTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await db.get_shelter_entry(1))
         cat = await db.get_waifu_by_user(1)
         self.assertFalse(cat["in_shelter"])
+
+    async def test_early_return_refunds_unused_days(self):
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        await db.upsert_hebao_item(1, "korm_waifu", "корм", set_value=20)
+        await db.place_in_shelter_atomic(1, 10, now=start)  # списали 20 корма
+        # Прошло 3 полных суток + 1 час: использовано 4 суток, вернуть должны 6.
+        result = await db.take_from_shelter_atomic(1, now=start + timedelta(days=3, hours=1))
+        self.assertEqual(result["unused_days"], 6)
+        self.assertEqual(result["refunded"], {"korm_waifu": 12})
+        items = {i["item_key"]: i["quantity"] for i in await db.get_hebao_items(1)}
+        self.assertEqual(items["korm_waifu"], 12)
+
+    async def test_return_immediately_refunds_everything(self):
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        await db.upsert_hebao_item(1, "miska_risa", "рис", set_value=30)
+        await db.place_in_shelter_atomic(1, 3, now=start)  # 9 риса
+        result = await db.take_from_shelter_atomic(1, now=start)
+        self.assertEqual(result["unused_days"], 3)
+        self.assertEqual(result["refunded"], {"miska_risa": 9})
+        items = {i["item_key"]: i["quantity"] for i in await db.get_hebao_items(1)}
+        self.assertEqual(items["miska_risa"], 30)
+
+    async def test_refund_after_extension_returns_latest_payment_first(self):
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        await db.upsert_hebao_item(1, "korm_waifu", "корм", set_value=4)
+        await db.upsert_hebao_item(1, "miska_risa", "рис", set_value=30)
+        await db.place_in_shelter_atomic(1, 2, now=start)  # 4 корма, корм кончился
+        # Продление уходит в рис: 3 за сутки.
+        await db.extend_shelter_atomic(1, 2, now=start)
+        self.assertEqual(
+            {i["item_key"]: i["quantity"] for i in await db.get_hebao_items(1)},
+            {"miska_risa": 24},
+        )
+        result = await db.take_from_shelter_atomic(1, now=start)
+        self.assertEqual(result["unused_days"], 4)
+        # Сначала возвращается последняя оплата (рис), затем более ранняя (корм).
+        self.assertEqual(result["refunded"], {"miska_risa": 6, "korm_waifu": 4})
+        items = {i["item_key"]: i["quantity"] for i in await db.get_hebao_items(1)}
+        self.assertEqual(items["korm_waifu"], 4)
+        self.assertEqual(items["miska_risa"], 30)
+
+    async def test_no_refund_after_full_term(self):
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        await db.upsert_hebao_item(1, "korm_waifu", "корм", set_value=4)
+        await db.place_in_shelter_atomic(1, 2, now=start)
+        returned = await db.process_expired_shelter(start + timedelta(days=2))
+        self.assertEqual(returned[0]["unused_days"], 0)
+        self.assertEqual(returned[0]["refunded"], {})
+        items = {i["item_key"]: i["quantity"] for i in await db.get_hebao_items(1)}
+        self.assertEqual(items.get("korm_waifu", 0), 0)
 
     async def test_expiry_returns_cat_after_deadline(self):
         await db.upsert_hebao_item(1, "korm_waifu", "корм", set_value=10)

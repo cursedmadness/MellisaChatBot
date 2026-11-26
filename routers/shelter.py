@@ -265,10 +265,25 @@ async def shelter_take(message: Message) -> None:
             await message.answer("Твоей кошки нет в приюте — она уже дома.")
             return
 
+        refund = result.get("refunded") or {}
+        if refund:
+            parts = []
+            for key, amount in refund.items():
+                icon, name = ITEM_ICONS.get(key, ("🍽️", key))
+                parts.append(f"{icon} {name} — <b>{amount}</b> шт.")
+            refund_text = (
+                "\n\n💰 <b>Возврат за неиспользованные дни:</b>\n"
+                + "\n".join(parts)
+                + f"\n<i>Неиспользованных суток: {result.get('unused_days') or 0}</i>"
+            )
+        else:
+            refund_text = "\n\n<i>Возврата нет: оплаченные сутки уже использованы.</i>"
+
         await message.answer(
             f"🐾 <b>{escape(result['cat_name'] or 'Кошка')}</b> вернулась домой!\n\n"
             f"🍽️ Сытость: <b>{result['satiety']}%</b>\n"
             "<i>Она отдохнула и снова рада тебя видеть.</i>"
+            f"{refund_text}"
         )
     except Exception as e:
         logger.error(f"Ошибка в shelter_take: {e}")
