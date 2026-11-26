@@ -19,6 +19,7 @@ from database import (
     initialize_default_ratings,
     get_all_waifus_with_owners,
     get_user_city,
+    process_expired_shelter,
     init_db,
     close_db,
 )
@@ -138,6 +139,8 @@ async def waifu_greetings_task(bot: Bot):
             waifus = await get_all_waifus_with_owners()
 
             for w in waifus:
+                if w.get("in_shelter"):
+                    continue
                 try:
                     user_id = w["user_id"]
                     cat_name = escape(w["cat_name"] or "кошко-жена")
@@ -198,6 +201,8 @@ async def waifu_hunger_notifier_task(bot: Bot):
 
             waifus = await get_all_waifus_with_owners()
             for w in waifus:
+                if w.get("in_shelter"):
+                    continue
                 user_id = w["user_id"]
                 cat_name = escape(w["cat_name"] or "кошко-жена")
 
@@ -245,6 +250,39 @@ async def waifu_hunger_notifier_task(bot: Bot):
             await asyncio.sleep(60)
 
 
+async def shelter_expiry_task(bot: Bot):
+    """Возвращает кошек владельцам, когда оплаченный срок в приюте истёк."""
+    while True:
+        try:
+            await asyncio.sleep(15 * 60)
+
+            returned = await process_expired_shelter()
+            if not returned:
+                continue
+
+            logger.info(f"Из приюта вернулись кошки: {len(returned)}")
+            for item in returned:
+                try:
+                    cat_name = escape(item.get("cat_name") or "Кошка")
+                    await bot.send_message(
+                        item["user_id"],
+                        f"🏡 <b>Срок в приюте истёк</b>\n\n"
+                        f"{cat_name} вернулась домой и очень скучала.\n"
+                        f"🍽️ Сытость: <b>{item.get('satiety') or 0}%</b>\n\n"
+                        "Покормить: /feed_korm",
+                    )
+                    await asyncio.sleep(0.05)
+                except (TelegramForbiddenError, TelegramBadRequest):
+                    pass
+                except Exception as send_err:
+                    logger.debug(
+                        f"Не удалось уведомить о возврате из приюта {item.get('user_id')}: {send_err}"
+                    )
+        except Exception as e:
+            logger.error(f"Ошибка в задаче приюта: {e}")
+            await asyncio.sleep(60)
+
+
 async def waifu_random_rp_task(bot: Bot):
     """Фоновая задача для рандомных RP сообщений от кошко-жены в течение дня."""
     from routers.waifu_rp import generate_waifu_rp_message
@@ -263,6 +301,8 @@ async def waifu_random_rp_task(bot: Bot):
                 waifus = await get_all_waifus_with_owners()
                 for w in waifus:
                     # Шанс 10% на каждый 1 час получить РП-милость (в среднем 1 сообщение в день-два)
+                    if w.get("in_shelter"):
+                        continue
                     if random.random() < 0.10:
                         user_id = w["user_id"]
                         try:
@@ -312,6 +352,7 @@ async def main():
         asyncio.create_task(waifu_greetings_task(bot)),
         asyncio.create_task(waifu_hunger_notifier_task(bot)),
         asyncio.create_task(waifu_random_rp_task(bot)),
+        asyncio.create_task(shelter_expiry_task(bot)),
     ]
 
     # Монитор простоев Telegram: тревога и отчёт о восстановлении

@@ -74,6 +74,10 @@ def _format_waifu_profile(waifu: dict) -> str:
 
     trust = waifu.get("trust") or 0
 
+    shelter_line = (
+        "🏡 Сейчас живёт в приюте — /shelter_my\n" if waifu.get("in_shelter") else ""
+    )
+
     marriage_text = (
         "💍 Состоит в браке с хозяином"
         if waifu.get("is_married")
@@ -92,7 +96,7 @@ def _format_waifu_profile(waifu: dict) -> str:
         f"Я с тобой с {format_iso_date(date_cat)} — уже {days_together_str}!\n"
         f"Мой возраст: {format_count(age_days, 'день', 'дня', 'дней')}\n"
         f"Наш уровень доверия: {trust}%\n"
-        f"{marriage_text}\n\n"
+        f"{shelter_line}{marriage_text}\n\n"
         f"{hunger_line}, поэтому моё настроение {mood}\n"
         f"Если тебе интересно, что ещё можно со мной сделать — <i>ссылка на гайд</i>"
     )
@@ -216,6 +220,12 @@ async def abandon_waifu_request(message: Message) -> None:
         if not waifu:
             await message.answer(
                 "У вас нет кошко-жены, от которой можно было бы отказаться."
+            )
+            return
+
+        if waifu.get("in_shelter"):
+            await message.answer(
+                "🏡 Сначала заберите кошку из приюта: /shelter_take"
             )
             return
 
@@ -505,6 +515,12 @@ async def feed_waifu_korm(message: Message) -> None:
         )
         if result["status"] == "no_cat":
             await message.answer("У тебя пока нет кошко-жены.")
+            return
+        if result["status"] == "in_shelter":
+            await message.answer(
+                "🏡 Твоя кошка сейчас в приюте — там её кормят.\n"
+                "Забрать домой: /shelter_take"
+            )
             return
         if result["status"] == "cooldown":
             remaining = result["remaining_seconds"]

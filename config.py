@@ -59,3 +59,9 @@ SATISFACTION_DECAY_AMOUNT = 10  # Количество сытости, теря�
 
 # Настройки возраста кошки
 AGE_UPDATE_CHECK_HOURS = 24  # Проверка возраста каждый день
+
+# Настройки приюта для кошко-жен
+SHELTER_MAX_DAYS = 30  # Максимальный срок пребывания за один раз
+SHELTER_PRICE_KORM_PER_DAY = 2  # Корма за сутки
+SHELTER_PRICE_RICE_PER_DAY = 3  # Мисок риса за сутки
+SHELTER_RETURN_SATIETY_BONUS = 20  # Сытость, которую кошка набирает в приюте

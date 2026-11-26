@@ -12,6 +12,10 @@ from unittest.mock import patch
 def load_database():
     config = types.ModuleType("config")
     config.MAX_RICE_PER_USER = 6
+    config.SHELTER_MAX_DAYS = 30
+    config.SHELTER_PRICE_KORM_PER_DAY = 2
+    config.SHELTER_PRICE_RICE_PER_DAY = 3
+    config.SHELTER_RETURN_SATIETY_BONUS = 20
     spec = importlib.util.spec_from_file_location("database_under_test", Path(__file__).resolve().parents[1] / "database.py")
     module = importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules, {"config": config}):

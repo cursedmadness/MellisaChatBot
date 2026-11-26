@@ -5,7 +5,13 @@ from sqlite3 import Error
 from datetime import datetime, timedelta, timezone
 import logging
 
-from config import MAX_RICE_PER_USER
+from config import (
+    MAX_RICE_PER_USER,
+    SHELTER_MAX_DAYS,
+    SHELTER_PRICE_KORM_PER_DAY,
+    SHELTER_PRICE_RICE_PER_DAY,
+    SHELTER_RETURN_SATIETY_BONUS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +269,28 @@ async def add_new_columns() -> None:
                     user_id INTEGER NOT NULL, activity_date TEXT NOT NULL,
                     messages INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(user_id, activity_date))""")
+
+                # Приют: кошка считается в приюте, пока returned_at IS NULL
+                await cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS shelter (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        cat_id INTEGER NOT NULL,
+                        cat_name TEXT,
+                        placed_at TEXT NOT NULL,
+                        days INTEGER NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        returned_at TEXT,
+                        food_key TEXT,
+                        food_paid INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_shelter_active ON shelter(user_id, returned_at)"
+                )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_shelter_expires ON shelter(returned_at, expires_at)"
+                )
 
                 # Таблица для активных наказаний
                 await cursor.execute("""
@@ -630,6 +658,7 @@ def _waifu_row_to_dict(row: aiosqlite.Row | None) -> dict | None:
         "trust": safe(11, 0),
         "last_feed_time": safe(12),
         "miska_risa": safe(13, 0),
+        "in_shelter": bool(safe(14, 0)),
     }
 
 
@@ -726,7 +755,8 @@ async def get_waifu_by_user(user_id: int) -> dict | None:
             await cursor.execute(
                 """
                 SELECT cats_id, user_id, cat_name, category_cats, date_cat,
-                       satiety, mood, image_cats, age_days, last_age_update, last_satiety_update, trust, last_feed_time, miska_risa
+                       satiety, mood, image_cats, age_days, last_age_update, last_satiety_update, trust, last_feed_time, miska_risa,
+                       (SELECT 1 FROM shelter s WHERE s.user_id = waifu_cat.user_id AND s.returned_at IS NULL) AS in_shelter
                 FROM waifu_cat WHERE user_id = ?
                 """,
                 (user_id,),
@@ -872,7 +902,9 @@ async def get_all_waifus_with_owners() -> list[dict]:
             await cursor.execute(
                 """
                 SELECT w.user_id, w.cat_name, w.category_cats, w.age_days,
-                       u.nickname, u.username
+                       u.nickname, u.username,
+                       (SELECT 1 FROM shelter s
+                        WHERE s.user_id = w.user_id AND s.returned_at IS NULL) AS in_shelter
                 FROM waifu_cat w
                 LEFT JOIN users u ON w.user_id = u.user_id
                 """
@@ -886,6 +918,7 @@ async def get_all_waifus_with_owners() -> list[dict]:
                     "age_days": row[3],
                     "nickname": row[4],
                     "username": row[5],
+                    "in_shelter": bool(row[6]),
                 }
                 for row in rows
             ]
@@ -905,6 +938,7 @@ async def clear_all_waifus() -> int:
         try:
             cursor = await conn.cursor()
             await cursor.execute("DELETE FROM marriages")
+            await cursor.execute("DELETE FROM shelter")
             await cursor.execute("DELETE FROM waifu_cat")
             count = cursor.rowcount
             await conn.commit()
@@ -926,6 +960,7 @@ async def delete_waifu_by_user(user_id: int) -> bool:
         try:
             cursor = await conn.cursor()
             await cursor.execute("DELETE FROM marriages WHERE cat_id IN (SELECT cats_id FROM waifu_cat WHERE user_id = ?)", (user_id,))
+            await cursor.execute("DELETE FROM shelter WHERE user_id = ?", (user_id,))
             await cursor.execute("DELETE FROM waifu_cat WHERE user_id = ?", (user_id,))
             count = cursor.rowcount
             await conn.commit()
@@ -1028,6 +1063,9 @@ async def decay_waifu_satiety(user_id: int, now: datetime | None = None) -> dict
         waifu = await get_waifu_by_user(user_id)
         if not waifu:
             return None
+        if waifu.get("in_shelter"):
+            # В приюте кошку кормят: голод замирает до возвращения.
+            return waifu
         now = now or datetime.now(timezone.utc)
         try:
             last = datetime.fromisoformat(waifu["last_satiety_update"])
@@ -1059,6 +1097,8 @@ async def feed_waifu_atomic(user_id: int, satiety: int, trust_bonus: int,
         waifu = await decay_waifu_satiety(user_id,now)
         if not waifu:
             return {"status":"no_cat"}
+        if waifu.get("in_shelter"):
+            return {"status":"in_shelter"}
         try:
             last = datetime.fromisoformat(waifu["last_feed_time"])
             if last.tzinfo is None:
@@ -1092,6 +1132,281 @@ async def feed_waifu_atomic(user_id: int, satiety: int, trust_bonus: int,
         await conn.commit()
         return {"status":"ok","cat_name":waifu["cat_name"],"trust":trust,
                 "item_key":key,"left_qty":quantity-1}
+
+
+# --- Приют для кошко-жен ---
+
+SHELTER_PRICES = {
+    "korm_waifu": SHELTER_PRICE_KORM_PER_DAY,
+    "miska_risa": SHELTER_PRICE_RICE_PER_DAY,
+}
+
+_SHELTER_COLUMNS = (
+    "id, user_id, cat_id, cat_name, placed_at, days, expires_at, returned_at, "
+    "food_key, food_paid"
+)
+
+
+def _shelter_row_to_dict(row: aiosqlite.Row | None) -> dict | None:
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "cat_id": row[2],
+        "cat_name": row[3],
+        "placed_at": row[4],
+        "days": row[5],
+        "expires_at": row[6],
+        "returned_at": row[7],
+        "food_key": row[8],
+        "food_paid": row[9],
+    }
+
+
+def shelter_price(days: int) -> dict[str, int]:
+    """Сколько еды нужно за указанный срок для каждого вида."""
+    return {key: price * days for key, price in SHELTER_PRICES.items()}
+
+
+async def is_cat_in_shelter(user_id: int) -> bool:
+    """Быстрая проверка: кошка пользователя сейчас в приюте."""
+    async with await create_connection() as conn:
+        cursor = await conn.execute(
+            "SELECT 1 FROM shelter WHERE user_id=? AND returned_at IS NULL LIMIT 1",
+            (user_id,),
+        )
+        return await cursor.fetchone() is not None
+
+
+async def get_shelter_entry(user_id: int) -> dict | None:
+    """Активная запись приюта для пользователя или None."""
+    async with await create_connection() as conn:
+        cursor = await conn.execute(
+            f"SELECT {_SHELTER_COLUMNS} FROM shelter "
+            "WHERE user_id=? AND returned_at IS NULL ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
+        return _shelter_row_to_dict(await cursor.fetchone())
+
+
+async def _pay_shelter_food(conn, user_id: int, days: int, now: datetime) -> dict:
+    """Списывает еду за приют. Возвращает {'ok': key, 'paid': N} или причину отказа."""
+    needed = shelter_price(days)
+    stock = {}
+    cursor = await conn.execute(
+        """SELECT item_key, quantity FROM hebao_items
+        WHERE user_id=? AND item_key IN ('korm_waifu','miska_risa')""",
+        (user_id,),
+    )
+    for key, quantity in await cursor.fetchall():
+        stock[key] = quantity
+
+    # Сначала пробуем оплатить кормом, затем рисом.
+    for key in ("korm_waifu", "miska_risa"):
+        cost = needed[key]
+        if stock.get(key, 0) < cost:
+            continue
+        cursor = await conn.execute(
+            """UPDATE hebao_items SET quantity=quantity-?, updated_at=?
+            WHERE user_id=? AND item_key=? AND quantity>=?""",
+            (cost, now.isoformat(), user_id, key, cost),
+        )
+        if cursor.rowcount == 1:
+            return {"ok": key, "paid": cost, "have": stock}
+    return {"ok": None, "need": needed, "have": stock}
+
+
+async def place_in_shelter_atomic(
+    user_id: int, days: int, now: datetime | None = None
+) -> dict:
+    """Сдаёт кошку в приют: списание еды и запись создаются единым целым."""
+    now = now or datetime.now(timezone.utc)
+    if not 1 <= int(days) <= SHELTER_MAX_DAYS:
+        return {"status": "bad_days", "max_days": SHELTER_MAX_DAYS}
+
+    async with await create_connection() as conn:
+        waifu = await get_waifu_by_user(user_id)
+        if not waifu:
+            return {"status": "no_cat"}
+
+        active = await get_shelter_entry(user_id)
+        if active:
+            return {"status": "already", "until": active["expires_at"]}
+
+        payment = await _pay_shelter_food(conn, user_id, days, now)
+        if not payment["ok"]:
+            return {
+                "status": "no_food",
+                "need": payment["need"],
+                "have": payment["have"],
+            }
+
+        expires = now + timedelta(days=days)
+        await conn.execute(
+            """INSERT INTO shelter
+            (user_id, cat_id, cat_name, placed_at, days, expires_at, food_key, food_paid)
+            VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                user_id,
+                waifu["cats_id"],
+                waifu.get("cat_name"),
+                now.isoformat(),
+                int(days),
+                expires.isoformat(),
+                payment["ok"],
+                payment["paid"],
+            ),
+        )
+        await conn.commit()
+        return {
+            "status": "ok",
+            "cat_name": waifu.get("cat_name"),
+            "days": int(days),
+            "expires_at": expires.isoformat(),
+            "food_key": payment["ok"],
+            "food_paid": payment["paid"],
+            "left": payment["have"].get(payment["ok"], 0) - payment["paid"],
+        }
+
+
+async def extend_shelter_atomic(
+    user_id: int, days: int, now: datetime | None = None
+) -> dict:
+    """Продлевает срок в приюте, повторно списывая еду."""
+    now = now or datetime.now(timezone.utc)
+    if not 1 <= int(days) <= SHELTER_MAX_DAYS:
+        return {"status": "bad_days", "max_days": SHELTER_MAX_DAYS}
+
+    async with await create_connection() as conn:
+        entry = await get_shelter_entry(user_id)
+        if not entry:
+            return {"status": "not_in_shelter"}
+
+        total_days = entry["days"] + int(days)
+        if total_days > SHELTER_MAX_DAYS:
+            return {"status": "too_long", "max_days": SHELTER_MAX_DAYS}
+
+        payment = await _pay_shelter_food(conn, user_id, days, now)
+        if not payment["ok"]:
+            return {
+                "status": "no_food",
+                "need": payment["need"],
+                "have": payment["have"],
+            }
+
+        placed_at = datetime.fromisoformat(entry["placed_at"])
+        expires = placed_at + timedelta(days=total_days)
+        food_key = entry["food_key"]
+        if food_key and food_key != payment["ok"]:
+            food_key = "mixed"
+        await conn.execute(
+            """UPDATE shelter SET days=?, expires_at=?, food_key=?, food_paid=food_paid+?
+            WHERE id=?""",
+            (total_days, expires.isoformat(), food_key, payment["paid"], entry["id"]),
+        )
+        await conn.commit()
+        return {
+            "status": "ok",
+            "cat_name": entry["cat_name"],
+            "days": total_days,
+            "expires_at": expires.isoformat(),
+            "food_key": payment["ok"],
+            "food_paid": payment["paid"],
+            "left": payment["have"].get(payment["ok"], 0) - payment["paid"],
+        }
+
+
+async def _return_cat_from_shelter(conn, entry: dict, now: datetime) -> dict:
+    """Закрывает запись приюта и возвращает кошке силы."""
+    await conn.execute(
+        "UPDATE shelter SET returned_at=? WHERE id=?", (now.isoformat(), entry["id"])
+    )
+    cursor = await conn.execute(
+        "SELECT satiety FROM waifu_cat WHERE user_id=?", (entry["user_id"],)
+    )
+    row = await cursor.fetchone()
+    satiety = None
+    if row:
+        satiety = min(100, (row[0] or 0) + SHELTER_RETURN_SATIETY_BONUS)
+        await conn.execute(
+            """UPDATE waifu_cat SET satiety=?, mood=?, last_satiety_update=?
+            WHERE user_id=?""",
+            (satiety, satiety_mood(satiety), now.isoformat(), entry["user_id"]),
+        )
+    return {"user_id": entry["user_id"], "cat_name": entry["cat_name"], "satiety": satiety}
+
+
+async def take_from_shelter_atomic(
+    user_id: int, now: datetime | None = None
+) -> dict:
+    """Забирает кошку из приюта досрочно."""
+    now = now or datetime.now(timezone.utc)
+    async with await create_connection() as conn:
+        entry = await get_shelter_entry(user_id)
+        if not entry:
+            return {"status": "not_in_shelter"}
+        result = await _return_cat_from_shelter(conn, entry, now)
+        await conn.commit()
+        return {"status": "ok", **result}
+
+
+async def process_expired_shelter(now: datetime | None = None) -> list[dict]:
+    """Возвращает владельцам кошек, у которых истёк оплаченный срок."""
+    now = now or datetime.now(timezone.utc)
+    async with await create_connection() as conn:
+        cursor = await conn.execute(
+            f"SELECT {_SHELTER_COLUMNS} FROM shelter "
+            "WHERE returned_at IS NULL AND expires_at <= ?",
+            (now.isoformat(),),
+        )
+        entries = [_shelter_row_to_dict(row) for row in await cursor.fetchall()]
+        returned = [await _return_cat_from_shelter(conn, entry, now) for entry in entries if entry]
+        if returned:
+            await conn.commit()
+        return returned
+
+
+async def get_shelter_cats(limit: int = 50) -> list[dict]:
+    """Список кошек, которые сейчас находятся в приюте."""
+    async with await create_connection() as conn:
+        cursor = await conn.execute(
+            """SELECT s.user_id, s.cat_name, s.placed_at, s.days, s.expires_at,
+                      w.age_days, w.satiety, w.category_cats,
+                      u.nickname, u.username
+            FROM shelter s
+            JOIN waifu_cat w ON w.user_id = s.user_id
+            LEFT JOIN users u ON u.user_id = s.user_id
+            WHERE s.returned_at IS NULL
+            ORDER BY s.placed_at ASC
+            LIMIT ?""",
+            (limit,),
+        )
+        return [
+            {
+                "user_id": row[0],
+                "cat_name": row[1],
+                "placed_at": row[2],
+                "days": row[3],
+                "expires_at": row[4],
+                "age_days": row[5],
+                "satiety": row[6],
+                "category": row[7],
+                "nickname": row[8],
+                "username": row[9],
+            }
+            for row in await cursor.fetchall()
+        ]
+
+
+async def count_shelter_cats() -> int:
+    """Сколько кошек сейчас в приюте."""
+    async with await create_connection() as conn:
+        cursor = await conn.execute(
+            "SELECT COUNT(*) FROM shelter WHERE returned_at IS NULL"
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
 
 
 async def can_receive_daily_food(user_id: int) -> bool:
@@ -1254,7 +1569,7 @@ async def delete_user_completely(username: str) -> bool:
             cursor = await conn.cursor()
 
             # Удаляем из всех таблиц
-            tables_to_clean = ["marriages", "hebao_items", "waifu_cat", "admins", "user_warnings", "active_punishments", "punishment_history", "rating_history", "activity_daily", "users"]
+            tables_to_clean = ["marriages", "shelter", "hebao_items", "waifu_cat", "admins", "user_warnings", "active_punishments", "punishment_history", "rating_history", "activity_daily", "users"]
             deleted_records = 0
 
             for table in tables_to_clean:
