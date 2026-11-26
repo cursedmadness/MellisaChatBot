@@ -1382,8 +1382,8 @@ async def _record_shelter_payment(
     )
 
 
-def _unused_days(entry: dict, now: datetime) -> int:
-    """Сколько полных оплаченных суток не потрачено. Начатые сутки считаются использованными."""
+def _used_days(entry: dict, now: datetime) -> int:
+    """Сколько полных суток кошка провела в приюте (неполные сутки не считаются)."""
     try:
         placed = datetime.fromisoformat(entry["placed_at"])
         if placed.tzinfo is None:
@@ -1393,9 +1393,22 @@ def _unused_days(entry: dict, now: datetime) -> int:
     total_days = int(entry.get("days") or 0)
     elapsed = (now - placed).total_seconds()
     if elapsed <= 0:
-        return total_days
-    used = int(elapsed // 86400) + (1 if elapsed % 86400 else 0)
-    return max(0, total_days - used)
+        return 0
+    return min(total_days, int(elapsed // 86400))
+
+
+def _unused_days(entry: dict, now: datetime) -> int:
+    """Сколько полных оплаченных суток не потрачено."""
+    total_days = int(entry.get("days") or 0)
+    return max(0, total_days - _used_days(entry, now))
+
+
+def _shelter_bonus(entry: dict, used_days: int) -> int:
+    """Бонус сытости пропорционален времени в приюте, чтобы не было бесплатного отдыха."""
+    total_days = int(entry.get("days") or 0)
+    if total_days <= 0:
+        return 0
+    return round(SHELTER_RETURN_SATIETY_BONUS * min(used_days, total_days) / total_days)
 
 
 async def _refund_unused_days(conn, entry: dict, unused: int) -> dict[str, int]:
@@ -1468,7 +1481,8 @@ async def _return_cat_from_shelter(conn, entry: dict, now: datetime) -> dict:
     row = await cursor.fetchone()
     satiety = None
     if row:
-        satiety = min(100, (row[0] or 0) + SHELTER_RETURN_SATIETY_BONUS)
+        bonus = _shelter_bonus(entry, _used_days(entry, now))
+        satiety = min(100, (row[0] or 0) + bonus)
         await conn.execute(
             """UPDATE waifu_cat SET satiety=?, mood=?, last_satiety_update=?
             WHERE user_id=?""",

@@ -123,13 +123,15 @@ class ShelterRepoTests(unittest.IsolatedAsyncioTestCase):
         items = {i["item_key"]: i["quantity"] for i in await db.get_hebao_items(1)}
         self.assertEqual(items["korm_waifu"], 8)  # еду не списали
 
-    async def test_take_returns_cat_with_bonus(self):
+    async def test_take_returns_cat_with_proportional_bonus(self):
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
         await db.upsert_hebao_item(1, "korm_waifu", "корм", set_value=10)
-        await db.place_in_shelter_atomic(1, 2)
+        await db.place_in_shelter_atomic(1, 2, now=start)
         await db.update_cat_state(1, satiety=40)
-        result = await db.take_from_shelter_atomic(1)
+        # Сутки в приюте из двух — половина бонуса.
+        result = await db.take_from_shelter_atomic(1, now=start + timedelta(days=1))
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["satiety"], 60)
+        self.assertEqual(result["satiety"], 50)
         self.assertIsNone(await db.get_shelter_entry(1))
         cat = await db.get_waifu_by_user(1)
         self.assertFalse(cat["in_shelter"])
@@ -140,18 +142,21 @@ class ShelterRepoTests(unittest.IsolatedAsyncioTestCase):
         await db.place_in_shelter_atomic(1, 10, now=start)  # списали 20 корма
         # Прошло 3 полных суток + 1 час: использовано 4 суток, вернуть должны 6.
         result = await db.take_from_shelter_atomic(1, now=start + timedelta(days=3, hours=1))
-        self.assertEqual(result["unused_days"], 6)
-        self.assertEqual(result["refunded"], {"korm_waifu": 12})
+        self.assertEqual(result["unused_days"], 7)  # полные 3 суток использованы
+        self.assertEqual(result["refunded"], {"korm_waifu": 14})
         items = {i["item_key"]: i["quantity"] for i in await db.get_hebao_items(1)}
-        self.assertEqual(items["korm_waifu"], 12)
+        self.assertEqual(items["korm_waifu"], 14)
 
     async def test_return_immediately_refunds_everything(self):
         start = datetime(2026, 1, 1, tzinfo=timezone.utc)
         await db.upsert_hebao_item(1, "miska_risa", "рис", set_value=30)
         await db.place_in_shelter_atomic(1, 3, now=start)  # 9 риса
-        result = await db.take_from_shelter_atomic(1, now=start)
+        await db.update_cat_state(1, satiety=40)
+        # Вернули через пару минут: неполные сутки не списываются, бонуса нет.
+        result = await db.take_from_shelter_atomic(1, now=start + timedelta(minutes=5))
         self.assertEqual(result["unused_days"], 3)
         self.assertEqual(result["refunded"], {"miska_risa": 9})
+        self.assertEqual(result["satiety"], 40)
         items = {i["item_key"]: i["quantity"] for i in await db.get_hebao_items(1)}
         self.assertEqual(items["miska_risa"], 30)
 
