@@ -7,10 +7,12 @@ from .shelter import shelter_router
 from .hebao import hebao_router
 from .rules import rules_router
 from .moderation_commands import moderation_router
+from .help import help_router
 from aiogram import Router
 
 main_router = Router() # подключение роутеров
 
+main_router.include_router(help_router) #Роутеры помощи (первыми, чтобы не перехватывались)
 main_router.include_router(admin_router) #Роутеры админ команд
 main_router.include_router(user_router) #Роутеры команд граждан
 main_router.include_router(waifu_cat_router) #Роутеры waifu/cat

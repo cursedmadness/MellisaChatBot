@@ -27,7 +27,6 @@ from routers.utils import (
     extract_args,
 )
 from routers.weather_service import get_weather_string
-from routers.strings import HELP_TEXT
 
 import logging
 
@@ -583,16 +582,6 @@ async def show_user_id(message: Message, command: CommandObject = None) -> None:
         await message.reply(response, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Ошибка в show_user_id: {e}")
-
-
-@user_router.message(Command("help"))
-@user_router.message(F.text.lower().in_(["помощь", ".помощь"]))
-async def help_command(message: Message) -> None:
-    """Отправляет гражданину список доступных команд."""
-    try:
-        await message.answer(HELP_TEXT, parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Ошибка в help_command: {e}")
 
 
 @user_router.message(Command("Kill"))
